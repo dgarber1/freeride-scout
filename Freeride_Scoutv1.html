@@ -1,0 +1,912 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Autonomous Freeride Scout: 3D Monoplotting & Trajectory Engine</title>
+  <script src="https://cesium.com/downloads/cesiumjs/releases/1.114/Build/Cesium/Cesium.js"></script>
+  <link href="https://cesium.com/downloads/cesiumjs/releases/1.114/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #121212; --panel: #1e1e1e; --card: #262626;
+      --primary: #7b2cbf; --primary-hover: #9d4edd;
+      --green: #10b981; --red: #ef4444; --amber: #f59e0b; --blue: #2563eb;
+      --text: #f3f4f6; --text-dim: #9ca3af; --border: #3f3f46;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; padding: 0; display: flex; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg); color: var(--text); height: 100dvh; overflow: hidden;
+    }
+
+    #ui {
+      width: 380px; height: 100%; background: var(--panel); padding: 12px; overflow-y: auto;
+      display: flex; flex-direction: column; gap: 8px; z-index: 10; border-right: 1px solid var(--border);
+    }
+    .card { background: var(--card); padding: 10px; border-radius: 8px; border: 1px solid var(--border); }
+    h2 { margin: 0 0 2px 0; font-size: 15px; color: #fff; }
+    .subtitle { font-size: 10px; color: var(--text-dim); margin-bottom: 6px; }
+
+    label { font-size: 11px; color: var(--text-dim); display: block; margin-bottom: 2px; font-weight: 500; }
+    input, select {
+      width: 100%; padding: 6px 8px; margin-bottom: 5px;
+      background: #2d2d2d; border: 1px solid var(--border); border-radius: 4px; color: #fff; font-size: 12px;
+    }
+    button {
+      width: 100%; min-height: 34px; padding: 5px 8px; margin: 2px 0; border: none; border-radius: 5px;
+      cursor: pointer; font-weight: 600; font-size: 11px; color: #fff; display: flex; align-items: center;
+      justify-content: center; transition: background 0.15s ease;
+    }
+    .btn-purple { background: var(--primary); } .btn-purple:hover { background: var(--primary-hover); }
+    .btn-secondary { background: var(--border); }
+    .btn-green { background: var(--green); }
+    .btn-blue { background: var(--blue); }
+    .btn-amber { background: var(--amber); color: #000; }
+    .btn-red { background: var(--red); }
+
+    .stat-row { display: flex; justify-content: space-between; margin: 2px 0; font-size: 11px; border-bottom: 1px solid #333; padding-bottom: 2px; }
+    .stat-val { font-weight: 600; color: #fff; }
+
+    /* Split-screen layout */
+    #workspace { flex: 1; height: 100%; display: flex; position: relative; overflow: hidden; }
+    #cesiumContainer { flex: 1; height: 100%; position: relative; border-right: 1px solid #333; }
+    #photoContainer {
+      flex: 1; height: 100%; position: relative; background: #0a0a0a; display: flex;
+      flex-direction: column; padding: 8px; overflow: hidden;
+    }
+
+    #photoHeader { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+    #thumbStrip { display: flex; gap: 4px; overflow-x: auto; padding: 2px 0; margin-bottom: 4px; max-height: 52px; }
+    .thumb-item {
+      width: 46px; height: 46px; min-width: 46px; border-radius: 4px; object-fit: cover;
+      border: 1px solid #444; cursor: pointer; opacity: 0.6;
+    }
+    .thumb-item.active { border: 2px solid var(--primary-hover); opacity: 1; }
+
+    #canvasWrapper {
+      flex: 1; position: relative; display: flex; align-items: center; justify-content: center;
+      background: #000; border-radius: 6px; border: 1px solid #333; overflow: hidden;
+    }
+    #photoCanvas { max-width: 100%; max-height: 100%; object-fit: contain; cursor: crosshair; }
+
+    .palette { display: grid; grid-template-columns: repeat(4, 1fr); gap: 3px; margin: 4px 0; }
+    .palette-btn { min-height: 26px; font-size: 10px; padding: 2px; }
+
+    @media (max-width: 1024px) {
+      body { flex-direction: column; }
+      #ui { width: 100%; height: auto; max-height: 40dvh; border-right: none; border-bottom: 1px solid #333; }
+      #workspace { flex-direction: column; }
+      #cesiumContainer { height: 50%; width: 100%; border-right: none; border-bottom: 1px solid #333; }
+      #photoContainer { height: 50%; width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <!-- 1. LEFT CONTROL PANEL -->
+  <div id="ui">
+    <h2>Freeride Scout & Monoplotter</h2>
+    <div class="subtitle">3D Kinematics, Live Snow Telemetry & Monoplotting</div>
+
+    <div class="card">
+      <div style="font-weight: 700; font-size: 11px; color: #38bdf8; margin-bottom: 4px;">1. Snow Telemetry & Dynamics</div>
+      <div style="display: flex; gap: 4px;">
+        <div style="flex: 1;">
+          <label>Base Depth (m):</label>
+          <input id="snowDepth" type="number" step="0.1" value="1.8">
+        </div>
+        <div style="flex: 1;">
+          <label>24h Storm (cm):</label>
+          <input id="newSnow" type="number" step="1" value="10">
+        </div>
+      </div>
+      <label>Snow Condition:</label>
+      <select id="snowCondition">
+        <option value="firm">Firm / Wind-Buffed Chalk</option>
+        <option value="powder">Deep Soft Powder (>25cm)</option>
+        <option value="crust">Wind Crust / Variable</option>
+      </select>
+      <button id="fetchWeatherBtn" class="btn-secondary">🌐 Sync Live Open-Meteo Snowpack</button>
+      <div id="weatherStatus" style="font-size: 10px; color: var(--text-dim); margin-top: 2px;"></div>
+    </div>
+
+    <div class="card">
+      <div style="font-weight: 700; font-size: 11px; color: #a855f7; margin-bottom: 4px;">2. Athlete Constraints & Gates</div>
+      <label>Max Stompable Cliff Drop (m):</label>
+      <input id="maxDrop" type="number" step="0.5" value="6.0">
+
+      <div style="display: flex; gap: 4px;">
+        <button id="setStartBtn" class="btn-secondary">Set Start Gate</button>
+        <button id="setFinishBtn" class="btn-secondary">Set Finish Gate</button>
+      </div>
+
+      <div style="display: flex; gap: 4px; margin-top: 2px;">
+        <button id="scanVenueBtn" class="btn-amber">🔍 Scan Features</button>
+        <button id="corralViewBtn" class="btn-secondary">👁️ Corral View</button>
+      </div>
+
+      <button id="solveBtn" class="btn-purple" style="margin-top: 4px;">⚡ Solve Winning IFSA Line (A*)</button>
+      <button id="playPovBtn" class="btn-green" style="display: none;">▶ Run 3D POV Flythrough</button>
+      <button id="clear3dBtn" class="btn-secondary">Clear Map Elements</button>
+    </div>
+
+    <div class="card">
+      <div style="font-weight: 700; font-size: 11px; color: #10b981; margin-bottom: 4px;">3. Monoplotting (GCP Sync)</div>
+      <div style="font-size: 10px; color: #bbb; margin-bottom: 4px;">
+        Pair 4 distinct landmarks (peaks, isolated rocks, gate posts)[cite: 1].
+      </div>
+      <button id="btnGcpSync" class="btn-blue">🎯 Add GCP Pair (3D ➔ Photo)</button>
+      <div id="gcpStatus" style="font-size: 10px; color: #38bdf8; margin-top: 2px;">GCP Pairs Logged: 0 / 4</div>
+    </div>
+
+    <div class="card" id="statusCard">
+      <div id="statusText" style="font-size: 11px; color: #bbb;">Set Start Gate on ridge to initialize.</div>
+    </div>
+
+    <div class="card" id="outputCard" style="display: none;">
+      <div style="font-weight: 700; margin-bottom: 4px; font-size: 12px; color: var(--primary-hover);">IFSA Overall Impression (OI)</div>
+      <div class="stat-row"><span>Score Estimation:</span><span id="scoreVal" class="stat-val" style="color: #4ade80;">-- / 100</span></div>
+      <div class="stat-row"><span>Line Choice:</span><span id="lineVal" class="stat-val">--</span></div>
+      <div class="stat-row"><span>Air & Style:</span><span id="airVal" class="stat-val">--</span></div>
+      <div class="stat-row"><span>Fluidity:</span><span id="fluidVal" class="stat-val">--</span></div>
+      <div class="stat-row"><span>Control Margin (80% Rule):</span><span id="controlVal" class="stat-val">--</span></div>
+      <div id="featureList" style="margin-top: 4px; font-size: 10px; line-height: 1.3; color: #ccc;"></div>
+    </div>
+  </div>
+
+  <!-- 2. SPLIT WORKSPACE: 3D CESIUM (LEFT) + 2D PHOTO (RIGHT) -->
+  <div id="workspace">
+    <div id="cesiumContainer"></div>
+
+    <div id="photoContainer">
+      <div id="photoHeader">
+        <span style="font-size: 11px; font-weight: 700; color: #fff;">Corral Inspection Photos (Multi-Angle)</span>
+        <input type="file" id="photoUpload" accept="image/*" multiple style="display:none;">
+        <button class="btn-secondary" style="width: auto; min-height: 26px; padding: 2px 8px;" onclick="document.getElementById('photoUpload').click()">📁 Load Photos</button>
+      </div>
+
+      <div id="thumbStrip"></div>
+
+      <div id="canvasWrapper">
+        <canvas id="photoCanvas"></canvas>
+      </div>
+
+      <div class="palette">
+        <button class="palette-btn" style="background:#a855f7;" id="toolLine">Line</button>
+        <button class="palette-btn" style="background:#10b981;" id="toolStomp">Stomp</button>
+        <button class="palette-btn" style="background:#ef4444;" id="toolShark">Shark</button>
+        <button class="palette-btn" style="background:#f59e0b;" id="toolLip">Lip</button>
+      </div>
+
+      <div style="display: flex; gap: 4px;">
+        <button id="btnCalibrate" class="btn-secondary" style="font-size: 10px; flex: 1;">Ruler (1.8m)</button>
+        <button id="btnMeasureDrop" class="btn-secondary" style="font-size: 10px; flex: 1;">Measure Cliff</button>
+        <button id="clearMarksBtn" class="btn-secondary" style="font-size: 10px; flex: 1;">Clear Marks</button>
+        <button id="exportPhotoBtn" class="btn-blue" style="font-size: 10px; flex: 1;">📲 Save Phone</button>
+      </div>
+      <div id="rulerResult" style="font-size: 10px; color: #4ade80; margin-top: 2px; font-weight: 600; min-height: 14px;"></div>
+    </div>
+  </div>
+
+  <script>
+    // =============================================================
+    // CONFIGURATION PASTE LOCATIONS
+    // =============================================================
+    // [1] PASTE YOUR CESIUM ION TOKEN HERE:
+    Cesium.Ion.defaultAccessToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJub25jZSI6IjB2NFVsendsTXJMQjF0NmoiLCJqdGkiOiJlYzY0YzNmNy0yY2ZlLTRiNmMtYTE4NC01YzI0NmE4ZDFlNzciLCJpZCI6NDgxNDU0LCJpc3MiOiJodHRwczovL2FwaS5jZXNpdW0uY29tIiwiYXVkIjoidW5kZWZpbmVkX2RlZmF1bHQiLCJpYXQiOjE3ODg2MjUwMzN9.CMIIueehU7W17wuUfECZWtylvzvSTn4bHRBXDpulcD0';
+
+    // [2] PASTE CUSTOM 1-METER TERRAIN ASSET ID HERE (OR LEAVE NULL):
+    const CUSTOM_TERRAIN_ASSET_ID = 5822831;
+
+    // [3] PASTE INITIAL VENUE COORDINATES & CAMERA ELEVATION HERE:
+    // Default: El Colorado, Chile (Andes) or Kicking Horse, BC
+    let venueCoords = { lon: -70.2950, lat: -33.3550, alt: 4200 }; // El Colorado[cite: 2]
+
+    // [4] PASTE CALIBRATION REFERENCE LANDMARK HEIGHT (METERS):
+    const DEFAULT_LANDMARK_HEIGHT_METERS = 1.8; // Average height of rider in gear[cite: 2]
+
+    // =============================================================
+    // 1. CESIUM 3D VIEWER INITIALIZATION
+    // =============================================================
+    const viewer = new Cesium.Viewer('cesiumContainer', {
+      baseLayer: Cesium.ImageryLayer.fromWorldImagery(),
+      geocoder: true, timeline: false, animation: false, baseLayerPicker: false
+    });
+
+    if (CUSTOM_TERRAIN_ASSET_ID) {
+      Cesium.CesiumTerrainProvider.fromIonAssetId(CUSTOM_TERRAIN_ASSET_ID)
+        .then(p => viewer.terrainProvider = p)
+        .catch(() => viewer.terrain = Cesium.Terrain.fromWorldTerrain());
+    } else {
+      viewer.terrain = Cesium.Terrain.fromWorldTerrain();
+    }
+
+    viewer.camera.setView({
+      destination: Cesium.Cartesian3.fromDegrees(venueCoords.lon, venueCoords.lat, venueCoords.alt),
+      orientation: { heading: Cesium.Math.toRadians(0.0), pitch: Cesium.Math.toRadians(-35.0), roll: 0.0 }
+    });
+
+    // =============================================================
+    // 2. LIVE SNOW TELEMETRY (OPEN-METEO)
+    // =============================================================
+    document.getElementById('fetchWeatherBtn').onclick = async () => {
+      const status = document.getElementById('weatherStatus');
+      status.textContent = "Querying live snowpack telemetry...";
+      const lat = startCartographic ? Cesium.Math.toDegrees(startCartographic.latitude) : venueCoords.lat;
+      const lon = startCartographic ? Cesium.Math.toDegrees(startCartographic.longitude) : venueCoords.lon;
+
+      try {
+        const res = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(4)}&longitude=${lon.toFixed(4)}&current=snow_depth,snowfall,temperature_2m,wind_speed_10m&timezone=auto`);
+        const data = await res.json();
+        const cur = data.current;
+        if (cur) {
+          const depth = cur.snow_depth !== null ? cur.snow_depth : 1.6;
+          const storm = cur.snowfall !== null ? cur.snowfall : 0.0;
+          document.getElementById('snowDepth').value = depth.toFixed(2);
+          document.getElementById('newSnow').value = Math.round(storm * 10);
+          status.innerHTML = `<span style="color:#10b981;">Telemetry synced: ${depth.toFixed(2)}m base, ${Math.round(storm*10)}cm fresh, ${cur.temperature_2m}°C, Wind ${cur.wind_speed_10m} km/h.</span>`;
+        }
+      } catch (e) {
+        status.innerHTML = `<span style="color:#ef4444;">API unavailable; using local manual inputs.</span>`;
+      }
+    };
+
+    // =============================================================
+    // 3. MAP PICKING, GATES & VENUE CORRAL
+    // =============================================================
+    let startCartographic = null, finishCartographic = null, pickMode = null;
+    let activeEntities = [], venueScannedEntities = [];
+    let solvedTrajectoryPositions = [];
+    const statusText = document.getElementById('statusText');
+
+    document.getElementById('setStartBtn').onclick = () => { pickMode = 'start'; statusText.innerHTML = "<b style='color:#38bdf8;'>Click ridge for Start Gate.</b>"; };
+    document.getElementById('setFinishBtn').onclick = () => { pickMode = 'finish'; statusText.innerHTML = "<b style='color:#38bdf8;'>Click bottom for Finish Gate.</b>"; };
+
+    document.getElementById('clear3dBtn').onclick = () => {
+      activeEntities.forEach(e => viewer.entities.remove(e));
+      venueScannedEntities.forEach(e => viewer.entities.remove(e));
+      activeEntities = []; venueScannedEntities = [];
+      startCartographic = finishCartographic = null;
+      solvedTrajectoryPositions = [];
+      document.getElementById('outputCard').style.display = 'none';
+      document.getElementById('playPovBtn').style.display = 'none';
+      statusText.textContent = '3D markers cleared.';
+      redrawCanvas();
+    };
+
+    const sceneHandler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
+    sceneHandler.setInputAction(click => {
+      const ray = viewer.camera.getPickRay(click.position);
+      const cartesian = viewer.scene.globe.pick(ray, viewer.scene);
+      if (!Cesium.defined(cartesian)) return;
+
+      // Handle GCP Monoplotting registration click
+      if (gcpStage === '3D') {
+        lastGcpWorld = cartesian;
+        activeEntities.push(viewer.entities.add({
+          position: cartesian,
+          point: { pixelSize: 10, color: Cesium.Color.fromCssColorString('#38bdf8'), outlineColor: Cesium.Color.WHITE, outlineWidth: 2 },
+          label: { text: `GCP ${gcpPairs.length + 1}`, font: "10px bold sans-serif", verticalOrigin: Cesium.VerticalOrigin.BOTTOM, pixelOffset: new Cesium.Cartesian2(0, -8) }
+        }));
+        gcpStage = 'PHOTO';
+        document.getElementById('gcpStatus').innerHTML = `Now click the <b>SAME landmark on the Photo</b>.`;
+        return;
+      }
+
+      if (!pickMode) return;
+      const carto = Cesium.Cartographic.fromCartesian(cartesian);
+
+      if (pickMode === 'start') {
+        startCartographic = carto;
+        activeEntities.push(viewer.entities.add({
+          position: cartesian, point: { pixelSize: 12, color: Cesium.Color.GREEN, outlineColor: Cesium.Color.WHITE, outlineWidth: 2 },
+          label: { text: "START", font: "12px bold sans-serif", verticalOrigin: Cesium.VerticalOrigin.BOTTOM, pixelOffset: new Cesium.Cartesian2(0, -10) }
+        }));
+        statusText.innerHTML = "Start Gate set. Now set <b>Finish Gate</b>.";
+      } else if (pickMode === 'finish') {
+        finishCartographic = carto;
+        activeEntities.push(viewer.entities.add({
+          position: cartesian, point: { pixelSize: 12, color: Cesium.Color.RED, outlineColor: Cesium.Color.WHITE, outlineWidth: 2 },
+          label: { text: "FINISH", font: "12px bold sans-serif", verticalOrigin: Cesium.VerticalOrigin.BOTTOM, pixelOffset: new Cesium.Cartesian2(0, -10) }
+        }));
+        statusText.innerHTML = "Gates anchored! Click <b>'⚡ Solve Winning Line'</b>.";
+      }
+      pickMode = null;
+    }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+
+    document.getElementById('corralViewBtn').onclick = () => {
+      if (!finishCartographic || !startCartographic) return alert("Set Start and Finish Gates first.");
+      const finishPos = Cesium.Cartesian3.fromRadians(finishCartographic.longitude, finishCartographic.latitude, finishCartographic.height + 2.0);
+      const startPos = Cesium.Cartesian3.fromRadians(startCartographic.longitude, startCartographic.latitude, startCartographic.height);
+      viewer.camera.lookAt(startPos, new Cesium.HeadingPitchRange(
+        viewer.camera.heading, Cesium.Math.toRadians(18.0), Cesium.Cartesian3.distance(finishPos, startPos) * 1.05
+      ));
+      viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
+      statusText.innerHTML = "Camera set to <b>Finish Corral Inspection Angle</b>[cite: 1].";
+    };
+
+    // =============================================================
+    // 4. ECEF CORRIDOR SAMPLER & VENUE SCANNER
+    // =============================================================
+    async function sampleCorridorGrid(rows, cols, maxCorridorWidthMeters) {
+      const cStart = Cesium.Cartesian3.fromRadians(startCartographic.longitude, startCartographic.latitude, startCartographic.height);
+      const cFinish = Cesium.Cartesian3.fromRadians(finishCartographic.longitude, finishCartographic.latitude, finishCartographic.height);
+
+      const downVec = Cesium.Cartesian3.subtract(cFinish, cStart, new Cesium.Cartesian3());
+      const surfaceNormal = Cesium.Ellipsoid.WGS84.geodeticSurfaceNormal(cStart, new Cesium.Cartesian3());
+      const lateralVec = Cesium.Cartesian3.cross(downVec, surfaceNormal, new Cesium.Cartesian3());
+      Cesium.Cartesian3.normalize(lateralVec, lateralVec);
+
+      const grid = [], queryPoints = [];
+      for (let r = 0; r < rows; r++) {
+        grid[r] = [];
+        const progress = r / (rows - 1);
+        const centerPt = Cesium.Cartesian3.lerp(cStart, cFinish, progress, new Cesium.Cartesian3());
+
+        let width = maxCorridorWidthMeters;
+        if (progress < 0.15) width = Cesium.Math.lerp(35.0, maxCorridorWidthMeters, progress / 0.15);
+        else if (progress > 0.85) width = Cesium.Math.lerp(maxCorridorWidthMeters, 25.0, (progress - 0.85) / 0.15);
+
+        const halfWidth = width / 2.0;
+        for (let c = 0; c < cols; c++) {
+          const factor = (c - (cols - 1) / 2) / ((cols - 1) / 2);
+          const offset = Cesium.Cartesian3.multiplyByScalar(lateralVec, factor * halfWidth, new Cesium.Cartesian3());
+          const finalPos = Cesium.Cartesian3.add(centerPt, offset, new Cesium.Cartesian3());
+
+          const ptCarto = Cesium.Cartographic.fromCartesian(finalPos);
+          ptCarto.height = 0.0;
+          grid[r][c] = ptCarto;
+          queryPoints.push(ptCarto);
+        }
+      }
+
+      try { await Cesium.sampleTerrainMostDetailed(viewer.terrainProvider, queryPoints); } catch (e) {}
+      return grid;
+    }
+
+    document.getElementById('scanVenueBtn').onclick = async () => {
+      if (!startCartographic || !finishCartographic) return alert("Set Start and Finish Gates first.");
+      statusText.textContent = "Scanning face corridor for features...";
+
+      const baseSnow = parseFloat(document.getElementById('snowDepth').value);
+      const ROWS = 28, COLS = 11;
+      const grid = await sampleCorridorGrid(ROWS, COLS, 180.0);
+
+      const cStart = Cesium.Cartesian3.fromRadians(startCartographic.longitude, startCartographic.latitude, startCartographic.height);
+      const cFinish = Cesium.Cartesian3.fromRadians(finishCartographic.longitude, finishCartographic.latitude, finishCartographic.height);
+      const avgSlopeTan = (startCartographic.height - finishCartographic.height) / Math.max(Cesium.Cartesian3.distance(cStart, cFinish), 1.0);
+
+      venueScannedEntities.forEach(e => viewer.entities.remove(e));
+      venueScannedEntities = [];
+      let count = 0;
+
+      for (let r = 1; r < ROWS - 2; r++) {
+        for (let c = 0; c < COLS; c++) {
+          const p1 = grid[r][c], p2 = grid[r + 1][c], p3 = grid[r + 2][c];
+          const c1 = Cesium.Cartesian3.fromRadians(p1.longitude, p1.latitude, p1.height);
+          const c2 = Cesium.Cartesian3.fromRadians(p2.longitude, p2.latitude, p2.height);
+          const c3 = Cesium.Cartesian3.fromRadians(p3.longitude, p3.latitude, p3.height);
+
+          const hDist = Cesium.Cartesian3.distance(c1, c2);
+          const vDrop = p1.height - p2.height;
+          const excessDrop = vDrop - (hDist * avgSlopeTan);
+
+          if (excessDrop >= 1.4) {
+            const winterDrop = Math.max(1.0, excessDrop - (baseSnow * 0.35));
+            const landingPitch = Math.atan2(p2.height - p3.height, Cesium.Cartesian3.distance(c2, c3)) * (180 / Math.PI);
+
+            let markerColor = Cesium.Color.YELLOW.withAlpha(0.7);
+            let tag = "Punchy";
+            if (landingPitch >= 33 && landingPitch <= 44) { markerColor = Cesium.Color.GREEN.withAlpha(0.85); tag = "Stomp"; }
+            else if (landingPitch < 28) { markerColor = Cesium.Color.RED.withAlpha(0.85); tag = "Flat Shelf"; }
+
+            venueScannedEntities.push(viewer.entities.add({
+              position: Cesium.Cartesian3.fromRadians(p1.longitude, p1.latitude, p1.height + 0.6),
+              cylinder: { length: 0.8, topRadius: 2.8, bottomRadius: 2.8, material: markerColor },
+              label: {
+                text: `${winterDrop.toFixed(1)}m (${tag} ${landingPitch.toFixed(0)}°)`,
+                font: "10px bold sans-serif", fillColor: Cesium.Color.WHITE,
+                verticalOrigin: Cesium.VerticalOrigin.BOTTOM, pixelOffset: new Cesium.Cartesian2(0, -8),
+                distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0.0, 1800.0)
+              }
+            }));
+            count++;
+          }
+        }
+      }
+      statusText.innerHTML = `<b style='color:#10b981;'>Scan complete: Found ${count} features on this face.</b>`;
+    };
+
+    // =============================================================
+    // 5. IFSA A* WINNING LINE SOLVER & MONOPLOT SYNC
+    // =============================================================
+    document.getElementById('solveBtn').onclick = async () => {
+      if (!startCartographic || !finishCartographic) return alert("Set Start and Finish Gates first.");
+      statusText.textContent = "Solving optimal trajectory...";
+
+      const maxDropLimit = parseFloat(document.getElementById('maxDrop').value);
+      const baseSnow = parseFloat(document.getElementById('snowDepth').value);
+      const cond = document.getElementById('snowCondition').value;
+      const rider80 = maxDropLimit * 0.80; // IFSA 80% Safety Rule[cite: 1, 2]
+
+      const condMults = {
+        firm: { dropScale: 1.0, landMin: 34, landMax: 42, drift: 1.0 },
+        powder: { dropScale: 1.15, landMin: 29, landMax: 45, drift: 1.4 },
+        crust: { dropScale: 0.82, landMin: 35, landMax: 40, drift: 0.7 }
+      }[cond];
+
+      const ROWS = 28, COLS = 11;
+      const grid = await sampleCorridorGrid(ROWS, COLS, 160.0);
+
+      const cStart = Cesium.Cartesian3.fromRadians(startCartographic.longitude, startCartographic.latitude, startCartographic.height);
+      const cFinish = Cesium.Cartesian3.fromRadians(finishCartographic.longitude, finishCartographic.latitude, finishCartographic.height);
+      const avgSlopeTan = (startCartographic.height - finishCartographic.height) / Math.max(Cesium.Cartesian3.distance(cStart, cFinish), 1.0);
+
+      const centerCol = Math.floor(COLS / 2);
+      const pq = [{ r: 0, c: centerCol, cost: 0, path: [{ r: 0, c: centerCol }], features: [], lateralMoves: 0 }];
+      const visited = new Map();
+      let bestTerminal = null;
+
+      while (pq.length > 0) {
+        pq.sort((a, b) => a.cost - b.cost);
+        const curr = pq.shift();
+        const key = `${curr.r},${curr.c}`;
+        if (visited.has(key) && visited.get(key) <= curr.cost) continue;
+        visited.set(key, curr.cost);
+
+        if (curr.r === ROWS - 1) { bestTerminal = curr; break; }
+
+        const nextR = curr.r + 1;
+        for (let dc of [-1, 0, 1]) {
+          const nextC = curr.c + dc;
+          if (nextC < 0 || nextC >= COLS) continue;
+
+          const p1 = grid[curr.r][curr.c], p2 = grid[nextR][nextC];
+          const vDrop = p1.height - p2.height;
+          if (vDrop <= 0) continue;
+
+          const c1 = Cesium.Cartesian3.fromRadians(p1.longitude, p1.latitude, p1.height);
+          const c2 = Cesium.Cartesian3.fromRadians(p2.longitude, p2.latitude, p2.height);
+          const hDist = Cesium.Cartesian3.distance(c1, c2);
+
+          const baseDrop = hDist * avgSlopeTan;
+          let winterDrop = Math.max(0, vDrop - baseDrop);
+          if (winterDrop > 1.2) {
+            winterDrop = Math.max(1.0, winterDrop - (baseSnow * (condMults.drift - 0.7)));
+          }
+
+          let stepCost = hDist;
+          let feat = null;
+
+          let landingPitch = 36.0;
+          if (nextR + 1 < ROWS) {
+            const p3 = grid[nextR + 1][nextC];
+            const c3 = Cesium.Cartesian3.fromRadians(p3.longitude, p3.latitude, p3.height);
+            landingPitch = Math.atan2(p2.height - p3.height, Cesium.Cartesian3.distance(c2, c3)) * (180 / Math.PI);
+          }
+
+          if (winterDrop >= 1.5) {
+            if (winterDrop > (rider80 * condMults.dropScale)) {
+              stepCost += 5000; // Enforce 80% ceiling to preserve Control & Fluidity[cite: 1, 2]
+            } else if (landingPitch >= condMults.landMin && landingPitch <= condMults.landMax) {
+              stepCost -= (winterDrop * 90); // Air & Style reward[cite: 1]
+              feat = { drop: winterDrop, pitch: landingPitch, good: true, coord: p1 };
+            } else if (landingPitch < 28) {
+              stepCost += 2000; // Flat shelf compression penalty[cite: 1]
+              feat = { drop: winterDrop, pitch: landingPitch, good: false, coord: p1 };
+            }
+          }
+
+          if (dc !== 0) stepCost += (feat && feat.good) ? 2.5 : 8.5; // Fluidity traverse weighting[cite: 1]
+          if (curr.r > ROWS * 0.8 && winterDrop > 3.0) stepCost += 400; // Late-run fatigue penalty[cite: 1, 2]
+
+          pq.push({
+            r: nextR, c: nextC, cost: curr.cost + stepCost,
+            path: [...curr.path, { r: nextR, c: nextC }],
+            features: feat ? [...curr.features, feat] : [...curr.features],
+            lateralMoves: curr.lateralMoves + (dc !== 0 ? 1 : 0)
+          });
+        }
+      }
+
+      if (!bestTerminal) return alert("Could not solve path. Check gate positions.");
+
+      solvedTrajectoryPositions = [
+        Cesium.Cartesian3.fromRadians(startCartographic.longitude, startCartographic.latitude, startCartographic.height + 0.8),
+        ...bestTerminal.path.map(idx => {
+          const p = grid[idx.r][idx.c];
+          return Cesium.Cartesian3.fromRadians(p.longitude, p.latitude, p.height + 0.8);
+        }),
+        Cesium.Cartesian3.fromRadians(finishCartographic.longitude, finishCartographic.latitude, finishCartographic.height + 0.8)
+      ];
+
+      activeEntities.push(viewer.entities.add({
+        polyline: {
+          positions: solvedTrajectoryPositions, width: 5,
+          material: new Cesium.PolylineGlowMaterialProperty({ glowPower: 0.25, color: Cesium.Color.fromCssColorString('#a855f7') })
+        }
+      }));
+
+      bestTerminal.features.forEach((f, i) => {
+        activeEntities.push(viewer.entities.add({
+          position: Cesium.Cartesian3.fromRadians(f.coord.longitude, f.coord.latitude, f.coord.height + 0.6),
+          ellipse: { semiMajorAxis: 4.0, semiMinorAxis: 4.0, material: f.good ? Cesium.Color.GREEN.withAlpha(0.85) : Cesium.Color.RED.withAlpha(0.85) },
+          label: {
+            text: `Air ${i+1}: ${f.drop.toFixed(1)}m (${f.pitch.toFixed(0)}° landing)`,
+            font: "12px bold sans-serif", fillColor: Cesium.Color.WHITE,
+            verticalOrigin: Cesium.VerticalOrigin.BOTTOM, pixelOffset: new Cesium.Cartesian2(0, -10)
+          }
+        }));
+      });
+
+      // Score output (IFSA 100-Point Overall Impression Scale)[cite: 1]
+      const clean = bestTerminal.features.filter(f => f.good).length;
+      const flat = bestTerminal.features.filter(f => !f.good).length;
+      const lineScore = Math.min(19.5, 14.0 + (bestTerminal.features.length * 1.5));
+      const airScore = Math.min(20.0, 11.0 + (clean * 3.5) - (flat * 4.0));
+      const fluidScore = Math.max(9.0, 19.0 - (bestTerminal.lateralMoves * 0.35));
+      const controlScore = Math.max(8.5, 19.5 - (flat * 4.5));
+      const techniqueScore = 18.0;
+      const totalOI = (lineScore + airScore + fluidScore + controlScore + techniqueScore).toFixed(1);
+
+      document.getElementById('scoreVal').textContent = `${Math.min(99.0, totalOI)} / 100`;
+      document.getElementById('lineVal').textContent = `${lineScore.toFixed(1)} / 20`;
+      document.getElementById('airVal').textContent = `${airScore.toFixed(1)} / 20 (${clean} stomped)`;
+      document.getElementById('fluidVal').textContent = `${fluidScore.toFixed(1)} / 20`;
+      document.getElementById('controlVal').textContent = `${controlScore.toFixed(1)} / 20`;
+
+      let featListHtml = "<b>Hit Feature Sequence:</b><br>";
+      if (bestTerminal.features.length === 0) {
+        featListHtml += "High-speed fluid carve (no drops exceeding 1.5m in corridor).";
+      } else {
+        bestTerminal.features.forEach((f, idx) => {
+          featListHtml += `• Air ${idx+1}: <b>${f.drop.toFixed(1)}m cliff</b> → ${f.pitch.toFixed(0)}° transition (${f.good ? '<span style="color:#4ade80;">Stomped</span>' : '<span style="color:#ef4444;">Flat Warning</span>'})<br>`;
+        });
+      }
+      document.getElementById('featureList').innerHTML = featListHtml;
+      document.getElementById('outputCard').style.display = 'block';
+      document.getElementById('playPovBtn').style.display = 'flex';
+      statusText.innerHTML = "<b style='color:#10b981;'>Optimal Line Solved & Synced!</b>";
+
+      // Monoplot: Project the 3D trajectory directly onto the 2D Photo Canvas
+      project3DLineToPhoto();
+    };
+
+    // =============================================================
+    // 6. FIRST-PERSON (POV) 3D RUN PREVIEW
+    // =============================================================
+    let isPlayingPov = false;
+    let povStep = 0;
+    let povListener = null;
+
+    document.getElementById('playPovBtn').onclick = () => {
+      if (!solvedTrajectoryPositions.length) return;
+      if (isPlayingPov) {
+        stopPovFlythrough();
+        return;
+      }
+      startPovFlythrough();
+    };
+
+    function startPovFlythrough() {
+      isPlayingPov = true;
+      povStep = 0;
+      document.getElementById('playPovBtn').textContent = "⏹ Stop 3D POV Flythrough";
+      document.getElementById('playPovBtn').className = "btn-red";
+
+      povListener = viewer.clock.onTick.addEventListener(() => {
+        if (povStep >= solvedTrajectoryPositions.length - 1) {
+          stopPovFlythrough();
+          return;
+        }
+
+        const currPos = solvedTrajectoryPositions[povStep];
+        const nextPos = solvedTrajectoryPositions[povStep + 1];
+
+        // Eye level: 1.7m above the snow surface[cite: 2]
+        const eyePos = Cesium.Cartesian3.add(currPos, new Cesium.Cartesian3(0, 0, 1.7), new Cesium.Cartesian3());
+
+        viewer.camera.lookAt(nextPos, new Cesium.HeadingPitchRange(viewer.camera.heading, Cesium.Math.toRadians(-22.0), 12.0));
+        viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
+        povStep++;
+      });
+    }
+
+    function stopPovFlythrough() {
+      isPlayingPov = false;
+      if (povListener) {
+        povListener();
+        povListener = null;
+      }
+      document.getElementById('playPovBtn').textContent = "▶ Run 3D POV Flythrough";
+      document.getElementById('playPovBtn').className = "btn-green";
+    }
+
+    // =============================================================
+    // 7. MONOPLOTTING: DLT HOMOGRAPHY SOLVER (3D TO 2D PHOTO)
+    // =============================================================
+    let gcpPairs = []; // { worldPos, photoPos: {x, y} }
+    let gcpStage = null; // '3D' | 'PHOTO' | null
+    let lastGcpWorld = null;
+    let homographyMatrix = null;
+
+    document.getElementById('btnGcpSync').onclick = () => {
+      if (!loadedPhotos.length) return alert("Please load at least one inspection photo first.");
+      gcpStage = '3D';
+      document.getElementById('gcpStatus').innerHTML = `Click a prominent landmark on the <b>3D Cesium Face</b>.`;
+    };
+
+    // Direct Linear Transformation (DLT) Gaussian Elimination Solver
+    function solveHomography(srcPts, dstPts) {
+      if (srcPts.length < 4 || dstPts.length < 4) return null;
+      let A = [];
+      for (let i = 0; i < 4; i++) {
+        let x = srcPts[i][0], y = srcPts[i][1];
+        let u = dstPts[i][0], v = dstPts[i][1];
+        A.push([-x, -y, -1, 0, 0, 0, u * x, u * y, u]);
+        A.push([0, 0, 0, -x, -y, -1, v * x, v * y, v]);
+      }
+
+      // Solve Ah = 0 with h_8 = 1 using 8x8 Gaussian elimination
+      let M = [];
+      for (let i = 0; i < 8; i++) {
+        M[i] = [];
+        for (let j = 0; j < 8; j++) M[i][j] = A[i][j];
+        M[i][8] = -A[i][8];
+      }
+
+      for (let i = 0; i < 8; i++) {
+        let maxRow = i;
+        for (let k = i + 1; k < 8; k++) {
+          if (Math.abs(M[k][i]) > Math.abs(M[maxRow][i])) maxRow = k;
+        }
+        let tmp = M[i]; M[i] = M[maxRow]; M[maxRow] = tmp;
+
+        for (let k = i + 1; k < 8; k++) {
+          let c = -M[k][i] / M[i][i];
+          for (let j = i; j <= 8; j++) {
+            if (i === j) M[k][j] = 0;
+            else M[k][j] += c * M[i][j];
+          }
+        }
+      }
+
+      let h = new Array(9);
+      h[8] = 1.0;
+      for (let i = 7; i >= 0; i--) {
+        h[i] = M[i][8];
+        for (let j = i + 1; j < 8; j++) h[i] -= M[i][j] * h[j];
+        h[i] = h[i] / M[i][i];
+      }
+      return h;
+    }
+
+    function applyHomography(H, x, y) {
+      const denom = H[6] * x + H[7] * y + H[8];
+      return {
+        x: (H[0] * x + H[1] * y + H[2]) / denom,
+        y: (H[3] * x + H[4] * y + H[5]) / denom
+      };
+    }
+
+    function project3DLineToPhoto() {
+      if (!homographyMatrix || !solvedTrajectoryPositions.length || !loadedPhotos.length) return;
+
+      const offCanvas = loadedPhotos[activePhotoIdx].marksCanvas;
+      const offCtx = offCanvas.getContext('2d');
+
+      offCtx.beginPath();
+      offCtx.strokeStyle = '#a855f7';
+      offCtx.lineWidth = Math.max(offCanvas.width / 130, 6);
+      offCtx.lineCap = 'round';
+      offCtx.lineJoin = 'round';
+
+      let first = true;
+      solvedTrajectoryPositions.forEach(pos => {
+        const win = Cesium.SceneTransforms.wgs84ToWindowCoordinates(viewer.scene, pos);
+        if (!win) return;
+        const photoCoord = applyHomography(homographyMatrix, win.x, win.y);
+        if (first) {
+          offCtx.moveTo(photoCoord.x, photoCoord.y);
+          first = false;
+        } else {
+          offCtx.lineTo(photoCoord.x, photoCoord.y);
+        }
+      });
+      offCtx.stroke();
+      redrawCanvas();
+    }
+
+    // =============================================================
+    // 8. 2D PHOTO WORKSPACE & RULER ENGINE
+    // =============================================================
+    const photoUpload = document.getElementById('photoUpload');
+    const thumbStrip = document.getElementById('thumbStrip');
+    const canvas = document.getElementById('photoCanvas');
+    const ctx = canvas.getContext('2d');
+
+    let loadedPhotos = [];
+    let activePhotoIdx = 0;
+    let currentColor = '#a855f7';
+    let isDrawing = false;
+    let lastX = 0, lastY = 0;
+
+    let rulerMode = null; // 'calibrate' | 'measure' | null
+    let rulerPoints = [];
+    let pixelToMeterRatio = null;
+
+    document.getElementById('toolLine').onclick = () => { rulerMode = null; currentColor = '#a855f7'; };
+    document.getElementById('toolStomp').onclick = () => { rulerMode = null; currentColor = '#10b981'; };
+    document.getElementById('toolShark').onclick = () => { rulerMode = null; currentColor = '#ef4444'; };
+    document.getElementById('toolLip').onclick = () => { rulerMode = null; currentColor = '#f59e0b'; };
+
+    document.getElementById('btnCalibrate').onclick = () => {
+      rulerMode = 'calibrate';
+      rulerPoints = [];
+      document.getElementById('rulerResult').innerHTML = `Click top & bottom of known landmark (${DEFAULT_LANDMARK_HEIGHT_METERS}m)[cite: 2].`;
+    };
+
+    document.getElementById('btnMeasureDrop').onclick = () => {
+      if (!pixelToMeterRatio) return alert("Calibrate on a landmark first!");
+      rulerMode = 'measure';
+      rulerPoints = [];
+      document.getElementById('rulerResult').innerHTML = "Click cliff lip, then click landing base.";
+    };
+
+    photoUpload.onchange = (e) => {
+      const files = Array.from(e.target.files);
+      if (!files.length) return;
+      thumbStrip.innerHTML = '';
+      loadedPhotos = [];
+
+      files.forEach((file, idx) => {
+        const reader = new FileReader();
+        reader.onload = (evt) => {
+          const img = new Image();
+          img.src = evt.target.result;
+          img.onload = () => {
+            const off = document.createElement('canvas');
+            off.width = img.naturalWidth; off.height = img.naturalHeight;
+            loadedPhotos.push({ img: img, marksCanvas: off });
+
+            const thumb = document.createElement('img');
+            thumb.src = img.src;
+            thumb.className = `thumb-item ${loadedPhotos.length === 1 ? 'active' : ''}`;
+            const itemIdx = loadedPhotos.length - 1;
+            thumb.onclick = () => switchPhoto(itemIdx);
+            thumbStrip.appendChild(thumb);
+
+            if (loadedPhotos.length === 1) switchPhoto(0);
+          };
+        };
+        reader.readAsDataURL(file);
+      });
+    };
+
+    function switchPhoto(idx) {
+      activePhotoIdx = idx;
+      Array.from(thumbStrip.children).forEach((t, i) => t.className = `thumb-item ${i === idx ? 'active' : ''}`);
+      const item = loadedPhotos[idx];
+      canvas.width = item.img.naturalWidth;
+      canvas.height = item.img.naturalHeight;
+      redrawCanvas();
+      if (homographyMatrix && solvedTrajectoryPositions.length) project3DLineToPhoto();
+    }
+
+    function redrawCanvas() {
+      if (!loadedPhotos.length) return;
+      const item = loadedPhotos[activePhotoIdx];
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(item.img, 0, 0);
+      ctx.drawImage(item.marksCanvas, 0, 0);
+    }
+
+    function getCoords(e) {
+      const r = canvas.getBoundingClientRect();
+      const sx = canvas.width / r.width;
+      const sy = canvas.height / r.height;
+      const cx = e.touches ? e.touches[0].clientX : e.clientX;
+      const cy = e.touches ? e.touches[0].clientY : e.clientY;
+      return { x: (cx - r.left) * sx, y: (cy - r.top) * sy };
+    }
+
+    canvas.addEventListener('mousedown', e => {
+      const pt = getCoords(e);
+
+      // Handle GCP Monoplotting photo landmark pick
+      if (gcpStage === 'PHOTO') {
+        gcpPairs.push({ world: lastGcpWorld, photo: pt });
+        gcpStage = null;
+
+        // Draw GCP pin on Photo canvas
+        const offCtx = loadedPhotos[activePhotoIdx].marksCanvas.getContext('2d');
+        offCtx.fillStyle = '#38bdf8';
+        offCtx.beginPath();
+        offCtx.arc(pt.x, pt.y, Math.max(canvas.width / 180, 8), 0, 2 * Math.PI);
+        offCtx.fill();
+        offCtx.font = "bold 24px sans-serif";
+        offCtx.fillText(`GCP ${gcpPairs.length}`, pt.x + 12, pt.y - 8);
+        redrawCanvas();
+
+        document.getElementById('gcpStatus').innerHTML = `<b>GCP Pairs Logged: ${gcpPairs.length} / 4</b>`;
+
+        if (gcpPairs.length >= 4) {
+          const srcPts = [], dstPts = [];
+          gcpPairs.forEach(p => {
+            const win = Cesium.SceneTransforms.wgs84ToWindowCoordinates(viewer.scene, p.world);
+            if (win) {
+              srcPts.push([win.x, win.y]);
+              dstPts.push([p.photo.x, p.photo.y]);
+            }
+          });
+          homographyMatrix = solveHomography(srcPts, dstPts);
+          document.getElementById('gcpStatus').innerHTML = `<b style="color:#10b981;">Monoplotting Calibrated! Line auto-projects to Photo.</b>`;
+          if (solvedTrajectoryPositions.length) project3DLineToPhoto();
+        }
+        return;
+      }
+
+      if (rulerMode) {
+        rulerPoints.push(pt);
+        if (rulerPoints.length === 2) {
+          const dx = rulerPoints[1].x - rulerPoints[0].x;
+          const dy = rulerPoints[1].y - rulerPoints[0].y;
+          const pixelDist = Math.hypot(dx, dy);
+
+          if (rulerMode === 'calibrate') {
+            pixelToMeterRatio = pixelDist / DEFAULT_LANDMARK_HEIGHT_METERS;
+            document.getElementById('rulerResult').innerHTML = `Calibrated: ${(pixelToMeterRatio).toFixed(1)} px/meter.`;
+          } else if (rulerMode === 'measure') {
+            const dropMeters = (pixelDist / pixelToMeterRatio).toFixed(1);
+            document.getElementById('rulerResult').innerHTML = `Measured Winter Drop: <b>${dropMeters}m</b>`;
+            const offCtx = loadedPhotos[activePhotoIdx].marksCanvas.getContext('2d');
+            offCtx.strokeStyle = '#38bdf8'; offCtx.lineWidth = 6;
+            offCtx.beginPath();
+            offCtx.moveTo(rulerPoints[0].x, rulerPoints[0].y);
+            offCtx.lineTo(rulerPoints[1].x, rulerPoints[1].y);
+            offCtx.stroke();
+            redrawCanvas();
+          }
+          rulerMode = null;
+        }
+        return;
+      }
+      isDrawing = true; lastX = pt.x; lastY = pt.y;
+    });
+
+    canvas.addEventListener('mousemove', e => {
+      if (!isDrawing || rulerMode || gcpStage) return;
+      e.preventDefault();
+      const pt = getCoords(e);
+      const offCtx = loadedPhotos[activePhotoIdx].marksCanvas.getContext('2d');
+      offCtx.beginPath(); offCtx.moveTo(lastX, lastY); offCtx.lineTo(pt.x, pt.y);
+      offCtx.strokeStyle = currentColor;
+      offCtx.lineWidth = Math.max(canvas.width / 180, 5);
+      offCtx.lineCap = 'round';
+      offCtx.stroke();
+      lastX = pt.x; lastY = pt.y;
+      redrawCanvas();
+    });
+
+    canvas.addEventListener('mouseup', () => isDrawing = false);
+
+    document.getElementById('clearMarksBtn').onclick = () => {
+      if (!loadedPhotos.length) return;
+      const off = loadedPhotos[activePhotoIdx].marksCanvas;
+      off.getContext('2d').clearRect(0, 0, off.width, off.height);
+      redrawCanvas();
+      document.getElementById('rulerResult').textContent = '';
+      gcpPairs = [];
+      homographyMatrix = null;
+      document.getElementById('gcpStatus').textContent = "GCP Pairs Logged: 0 / 4";
+    };
+
+    document.getElementById('exportPhotoBtn').onclick = () => {
+      if (!loadedPhotos.length) return;
+      const link = document.createElement('a');
+      link.download = `freeride_scout_monoplotted_${activePhotoIdx + 1}.jpg`;
+      link.href = canvas.toDataURL('image/jpeg', 0.95);
+      link.click();
+    };
+  </script>
+</body>
+</html>
