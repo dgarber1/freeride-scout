@@ -1,0 +1,2347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Autonomous Freeride Scout: 3D Photo Fusion & Line Planner</title>
+  <script src="https://cesium.com/downloads/cesiumjs/releases/1.114/Build/Cesium/Cesium.js"></script>
+  <link href="https://cesium.com/downloads/cesiumjs/releases/1.114/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/exifr/dist/lite.umd.js"></script>
+  <style>
+    :root {
+      --bg: #121212; --panel: #1e1e1e; --card: #262626;
+      --primary: #7b2cbf; --primary-hover: #9d4edd;
+      --green: #10b981; --red: #ef4444; --amber: #f59e0b; --blue: #2563eb; --cyan: #0891b2;
+      --text: #f3f4f6; --text-dim: #9ca3af; --border: #3f3f46;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; padding: 0; display: flex; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg); color: var(--text); height: 100dvh; overflow: hidden;
+    }
+    #ui {
+      width: 410px; height: 100%; background: var(--panel); padding: 12px; overflow-y: auto;
+      display: flex; flex-direction: column; gap: 8px; z-index: 20; border-right: 1px solid var(--border);
+    }
+    .card { background: var(--card); padding: 10px; border-radius: 8px; border: 1px solid var(--border); }
+    h2 { margin: 0 0 2px 0; font-size: 15px; color: #fff; }
+    .subtitle { font-size: 10px; color: var(--text-dim); margin-bottom: 4px; }
+    label { font-size: 11px; color: var(--text-dim); display: block; margin-bottom: 2px; font-weight: 500; }
+    input[type="number"], select {
+      width: 100%; padding: 6px 8px; margin-bottom: 5px;
+      background: #2d2d2d; border: 1px solid var(--border); border-radius: 4px; color: #fff; font-size: 12px;
+    }
+    input[type="range"] { width: 100%; accent-color: var(--primary-hover); margin: 3px 0; cursor: pointer; }
+    button {
+      width: 100%; min-height: 32px; padding: 5px 8px; margin: 2px 0; border: none; border-radius: 5px;
+      cursor: pointer; font-weight: 600; font-size: 11px; color: #fff; display: flex; align-items: center;
+      justify-content: center; transition: background 0.15s ease;
+    }
+    .btn-purple { background: var(--primary); } .btn-purple:hover { background: var(--primary-hover); }
+    .btn-secondary { background: var(--border); } .btn-secondary:hover { background: #52525b; }
+    .btn-green { background: var(--green); }
+    .btn-blue { background: var(--blue); }
+    .btn-cyan { background: var(--cyan); }
+    .btn-amber { background: var(--amber); color: #000; }
+    .btn-red { background: var(--red); }
+
+    #viewportContainer { flex: 1; height: 100%; position: relative; overflow: hidden; background: #000; display: flex; }
+
+    /* Side-by-Side Photo Pane (shown during 3-Point Landmark Lock) */
+    #landmarkPhotoPane {
+      width: 0%; height: 100%; position: relative; background: #09090b;
+      border-right: 2px solid #38bdf8; overflow: hidden; display: none;
+      align-items: center; justify-content: center; z-index: 15;
+    }
+    #landmarkImgWrapper { position: relative; display: inline-block; max-width: 100%; max-height: 100%; cursor: crosshair; }
+    #landmarkPhotoImg { display: block; max-width: 100%; max-height: 100dvh; object-fit: contain; user-select: none; }
+    .lm-pin {
+      position: absolute; width: 22px; height: 22px; margin-left: -11px; margin-top: -11px;
+      border-radius: 50%; background: #38bdf8; color: #000; font-weight: 800; font-size: 11px;
+      display: flex; align-items: center; justify-content: center; border: 2px solid #fff;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.8); pointer-events: none;
+    }
+    #landmarkBanner {
+      position: absolute; top: 10px; left: 10px; right: 10px; z-index: 18;
+      background: rgba(15, 23, 42, 0.92); border: 1px solid #38bdf8; border-radius: 6px;
+      padding: 8px 10px; font-size: 11px; line-height: 1.4; color: #f8fafc;
+    }
+
+    #cesiumWrapper { flex: 1; height: 100%; position: relative; overflow: hidden; }
+    #cesiumContainer { width: 100%; height: 100%; position: absolute; top: 0; left: 0; z-index: 1; }
+    #ghostOverlay {
+      position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+      object-fit: cover; pointer-events: none; z-index: 5; opacity: 0.0;
+      transition: opacity 0.1s ease;
+    }
+
+    /* Floating Google-Earth Navigation Bar */
+    #navBar {
+      position: absolute; top: 12px; left: 12px; z-index: 12;
+      display: flex; flex-wrap: wrap; gap: 5px; background: rgba(18, 18, 18, 0.88);
+      backdrop-filter: blur(8px); padding: 6px; border-radius: 6px; border: 1px solid var(--border);
+    }
+    .nav-chip {
+      min-height: 26px; width: auto; padding: 3px 9px; margin: 0; font-size: 10px;
+      background: #2d2d2d; border: 1px solid #444;
+    }
+    .nav-chip:hover { background: #3f3f46; }
+    #venuePresetSelect {
+      width: auto; min-height: 26px; margin: 0; padding: 2px 6px; font-size: 10px;
+      background: #1e293b; border: 1px solid #38bdf8; color: #fff; border-radius: 4px;
+    }
+
+    #hudReticle {
+      position: absolute; bottom: 16px; right: 16px; z-index: 12;
+      background: rgba(18, 18, 18, 0.92); backdrop-filter: blur(8px);
+      padding: 9px 13px; border-radius: 6px; border: 1px solid var(--border);
+      font-size: 11px; line-height: 1.45; color: #e5e7eb; pointer-events: none; max-width: 470px;
+    }
+
+    .thumb-item {
+      position: relative; width: 52px; height: 52px; min-width: 52px; border-radius: 5px;
+      overflow: hidden; cursor: pointer; border: 2px solid #444;
+    }
+    .thumb-item img { width: 100%; height: 100%; object-fit: cover; }
+    .thumb-badge {
+      position: absolute; bottom: 0; left: 0; right: 0; font-size: 8px; font-weight: 700;
+      text-align: center; padding: 1px 2px; background: rgba(0,0,0,0.75); color: #fbbf24;
+    }
+    .thumb-badge.aligned { color: #4ade80; }
+
+    .nudge-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; margin-top: 4px; }
+    .nudge-btn { min-height: 25px; font-size: 10px; padding: 2px; background: #333; }
+    .stat-row { display: flex; justify-content: space-between; margin: 2px 0; font-size: 11px; border-bottom: 1px solid #333; padding-bottom: 2px; }
+    .stat-val { font-weight: 600; color: #fff; }
+
+    @media (max-width: 900px) {
+      body { flex-direction: column; }
+      #ui { width: 100%; height: 48dvh; border-right: none; border-bottom: 1px solid var(--border); }
+      #viewportContainer { height: 52dvh; }
+    }
+  </style>
+</head>
+<body>
+  <div id="ui">
+    <h2>Freeride 3D Photo Fusion</h2>
+    <div class="subtitle">GPS Skyline Auto-Fit, Multi-Angle Draping & Smooth POV Flythrough</div>
+
+    <!-- 1. MULTI-PHOTO ALIGNMENT, 3D TERRAIN DRAPING & OVERVIEW EXPORT -->
+    <div class="card">
+      <div style="font-weight: 700; font-size: 11px; color: #38bdf8; margin-bottom: 4px;">1. Multi-Angle Photos & 3D Terrain Draping (2–4 Photos)</div>
+      <input type="file" id="overviewPhotoUpload" accept="image/*" multiple style="display:none;">
+      <button class="btn-blue" onclick="document.getElementById('overviewPhotoUpload').click()">📷 Load Overview & Flank Photos</button>
+
+      <div id="photoThumbBar" style="display:flex; gap:6px; overflow-x:auto; margin:6px 0; min-height:0;"></div>
+      <div id="exifStatus" style="font-size: 10px; color: var(--text-dim); margin: 4px 0;">Load photos to auto-position via GPS + skyline horizon matching, or align manually.</div>
+
+      <!-- Pure-Browser Alignment Tools (No Backend Required) -->
+      <div id="alignToolsRow" style="display: none; flex-wrap: wrap; gap: 4px; margin-bottom: 4px;">
+        <button id="twoClickPoseBtn" class="btn-cyan" style="flex: 1; min-width: 115px;">📍 2-Click Standpoint</button>
+        <button id="autoSkylineBrowserBtn" class="btn-secondary" style="flex: 1; min-width: 115px;">🪄 Auto-Fit Skyline</button>
+        <button id="landmarkAlignBtn" class="btn-purple" style="flex: 1 1 100%;">🎯 3-Point Landmark Lock (Exact Snap)</button>
+      </div>
+
+      <label>Alignment Ghost Opacity: <span id="opacityLabel">0%</span></label>
+      <input type="range" id="opacitySlider" min="0" max="90" value="0">
+
+      <div class="nudge-grid">
+        <button class="nudge-btn" onclick="nudgeCamera(0, 0.25, 0)">▲ Pitch Up</button>
+        <button class="nudge-btn" onclick="nudgeCamera(0, 0, -1.5)">🔍 Zoom In</button>
+        <button class="nudge-btn" onclick="nudgeCamera(0, -0.25, 0)">▼ Pitch Dn</button>
+        <button class="nudge-btn" onclick="nudgeCamera(-0.25, 0, 0)">◀ Yaw Left</button>
+        <button class="nudge-btn" onclick="nudgeCamera(0, 0, 1.5)">🔎 Zoom Out</button>
+        <button class="nudge-btn" onclick="nudgeCamera(0.25, 0, 0)">▶ Yaw Right</button>
+      </div>
+
+      <div style="display: flex; gap: 4px; margin-top: 5px;">
+        <button id="drapePhotoBtn" class="btn-cyan" style="flex: 1; display: none;">🌐 Drape Active</button>
+        <button id="drapeAllBtn" class="btn-green" style="flex: 1; display: none;">🌐 Drape All Aligned</button>
+        <button id="clearDrapesBtn" class="btn-secondary" style="flex: 0.7; display: none;">Clear</button>
+      </div>
+      <div id="drapeStatus" style="font-size: 10px; color: #38bdf8; margin-top: 2px;"></div>
+
+      <button id="exportOverviewBtn" class="btn-amber" style="margin-top: 4px; display: none;">📲 Save Active Photo w/ Line</button>
+    </div>
+
+    <!-- 2. ADJACENT RIDGE SWEEP 3D MESH BUILDER (OPTIONAL PYTHON BACKEND) -->
+    <div class="card">
+      <div style="font-weight: 700; font-size: 11px; color: #10b981; margin-bottom: 4px;">2. Adjacent Ridge Sweep 3D Mesh (Optional Server)</div>
+      <div style="font-size: 10px; color: #bbb; margin-bottom: 4px;">
+        Requires <code>scout_server.py</code> running locally. Reconstructs a 3D snow mesh from 15–40 ridge photos.
+      </div>
+      <input type="file" id="ridgeBatchUpload" accept="image/*" multiple style="display:none;">
+      <button id="ridgeBatchBtn" class="btn-secondary" onclick="document.getElementById('ridgeBatchUpload').click()">🏔️ Upload Ridge Sweep & Build 3D Mesh</button>
+      <div style="display: flex; gap: 4px; margin-top: 3px;">
+        <button id="toggleMeshBtn" class="btn-secondary" style="display: none; flex: 1;">👁️ Hide 3D Mesh</button>
+        <button id="removeMeshBtn" class="btn-secondary" style="display: none; flex: 1;">🗑️ Remove Mesh</button>
+      </div>
+      <div id="meshStatus" style="font-size: 10px; color: var(--text-dim); margin-top: 3px;"></div>
+    </div>
+
+    <!-- 3. SNOWPACK TELEMETRY, CUSTOM LINE DRAWER & AI SOLVER -->
+    <div class="card">
+      <div style="font-weight: 700; font-size: 11px; color: #a855f7; margin-bottom: 4px;">3. Snowpack, Custom Line & IFSA Solver</div>
+      <div style="display: flex; gap: 4px;">
+        <div style="flex: 1;">
+          <label>Max Drop (m):</label>
+          <input id="maxDrop" type="number" step="0.5" value="5.0">
+        </div>
+        <div style="flex: 1;">
+          <label>Base Snow (m):</label>
+          <input id="snowDepth" type="number" step="0.1" value="1.8">
+        </div>
+      </div>
+
+      <div style="display: flex; gap: 4px;">
+        <div style="flex: 1;">
+          <label>24h Storm (cm):</label>
+          <input id="newSnow" type="number" step="1" value="10">
+        </div>
+        <div style="flex: 1;">
+          <label>Surface Regime:</label>
+          <select id="snowCondition">
+            <option value="firm">Firm / Wind-Buffed</option>
+            <option value="powder">Deep Powder (>25cm)</option>
+            <option value="crust">Wind Crust / Variable</option>
+          </select>
+        </div>
+      </div>
+
+      <div id="weatherStatus" style="font-size: 10px; color: var(--text-dim); margin-bottom: 4px;">Auto-syncs 1km SNODAS + 14-day storm wind on Start Gate drop.</div>
+
+      <!-- Custom Line Drawing Controls -->
+      <div style="display: flex; gap: 4px; margin-bottom: 3px;">
+        <button id="drawCustomBtn" class="btn-cyan" style="flex: 2;">✏️ Draw My Own Line</button>
+        <button id="undoCustomBtn" class="btn-secondary" style="flex: 1; display: none;">↩ Undo Pt</button>
+      </div>
+
+      <!-- Computer Solver Gates & Controls -->
+      <div style="display: flex; gap: 4px;">
+        <button id="setStartBtn" class="btn-secondary">Set Start Gate</button>
+        <button id="setFinishBtn" class="btn-secondary">Set Finish Gate</button>
+      </div>
+
+      <div style="display: flex; gap: 4px; margin-top: 2px;">
+        <button id="scanVenueBtn" class="btn-secondary">🔍 Scan All Cliffs</button>
+        <button id="solveBtn" class="btn-purple">⚡ AI Optimal Line</button>
+      </div>
+
+      <!-- Variable-Speed & Scrubbable 3D POV Flythrough Controls -->
+      <div id="povControlsBox" style="display: none; margin-top: 6px; padding-top: 6px; border-top: 1px solid #3f3f46;">
+        <div style="display: flex; gap: 4px;">
+          <button id="playPovBtn" class="btn-green" style="flex: 2;">▶ Play 3D POV Run</button>
+          <button id="resetPovBtn" class="btn-secondary" style="flex: 1;">⏮ Reset</button>
+        </div>
+        <div style="display: flex; justify-content: space-between; font-size: 10px; color: #ccc; margin-top: 4px;">
+          <span>Speed: <b id="povSpeedLabel">1.0x (Real-Time)</b></span>
+          <span>Progress: <b id="povProgressLabel">0%</b></span>
+        </div>
+        <input type="range" id="povSpeedSlider" min="0.2" max="3.0" step="0.1" value="1.0">
+        <input type="range" id="povScrubber" min="0" max="1000" step="1" value="0">
+      </div>
+
+      <button id="clearBtn" class="btn-secondary" style="margin-top: 4px;">Clear Lines & Pins</button>
+    </div>
+
+    <div class="card" id="outputCard" style="display: none;">
+      <div id="outputTitle" style="font-weight: 700; margin-bottom: 4px; font-size: 12px; color: var(--primary-hover);">IFSA Overall Impression (OI)</div>
+      <div class="stat-row"><span>Estimated Score:</span><span id="scoreVal" class="stat-val" style="color: #4ade80;">-- / 100</span></div>
+      <div class="stat-row"><span>Line Choice:</span><span id="lineVal" class="stat-val">--</span></div>
+      <div class="stat-row"><span>Air & Style:</span><span id="airVal" class="stat-val">--</span></div>
+      <div class="stat-row"><span>Fluidity:</span><span id="fluidVal" class="stat-val">--</span></div>
+      <div class="stat-row"><span>Control (80% Rule):</span><span id="controlVal" class="stat-val">--</span></div>
+      <div id="featureList" style="margin-top: 4px; font-size: 10px; line-height: 1.4; color: #ccc;"></div>
+    </div>
+  </div>
+
+  <div id="viewportContainer">
+    <!-- Side-by-side photo panel for 3-Point Landmark Lock -->
+    <div id="landmarkPhotoPane">
+      <div id="landmarkBanner">
+        <div id="landmarkPrompt" style="font-weight: 700; color: #38bdf8;">Step 1/3: Click Landmark #1 on the PHOTO</div>
+        <div style="display: flex; gap: 4px; margin-top: 5px;">
+          <button id="solveLandmarkBtn" class="btn-green" style="min-height: 24px; font-size: 10px; display: none;">✅ Lock 3D Pose Now</button>
+          <button id="resetLandmarkBtn" class="btn-secondary" style="min-height: 24px; font-size: 10px;">Reset Pins</button>
+          <button id="cancelLandmarkBtn" class="btn-red" style="min-height: 24px; font-size: 10px;">Cancel</button>
+        </div>
+      </div>
+      <div id="landmarkImgWrapper">
+        <img id="landmarkPhotoImg" alt="Landmark Calibration Photo">
+      </div>
+    </div>
+
+    <div id="cesiumWrapper">
+      <div id="navBar">
+        <select id="venuePresetSelect" title="Jump to Competition Venue">
+          <option value="kicking_horse">🏔️ Kicking Horse (T1 South)</option>
+          <option value="el_colorado">🏔️ El Colorado (Santa Tere)</option>
+          <option value="revelstoke">🏔️ Revelstoke (Mac Daddy)</option>
+          <option value="kirkwood">🏔️ Kirkwood (The Cirque)</option>
+        </select>
+        <button class="nav-chip" id="navFreeBtn">🌍 Free 3D Orbit</button>
+        <button class="nav-chip" id="navTopBtn">🗺️ Top-Down</button>
+        <button class="nav-chip" id="navCorralBtn">👁️ Finish Corral</button>
+        <button class="nav-chip" id="navStartBtn">⛷️ Start Gate</button>
+      </div>
+
+      <div id="cesiumContainer"></div>
+      <img id="ghostOverlay" alt="Inspection Photo Overlay">
+      <div id="hudReticle">
+        <b>Free 3D Map:</b> Left-drag pan • Right-drag zoom • Ctrl+drag / Middle-drag tilt & orbit.<br>
+        Click anywhere on the face to inspect <b>slope angle (°)</b>, <b>aspect</b> & <b>snow depth</b>.
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // =============================================================
+    // CONFIGURATION PASTE LOCATIONS
+    // =============================================================
+    // [1] PASTE YOUR CESIUM ION TOKEN HERE:
+    Cesium.Ion.defaultAccessToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJub25jZSI6IjB2NFVsendsTXJMQjF0NmoiLCJqdGkiOiJlYzY0YzNmNy0yY2ZlLTRiNmMtYTE4NC01YzI0NmE4ZDFlNzciLCJpZCI6NDgxNDU0LCJpc3MiOiJodHRwczovL2FwaS5jZXNpdW0uY29tIiwiYXVkIjoidW5kZWZpbmVkX2RlZmF1bHQiLCJpYXQiOjE3ODg2MjUwMzN9.CMIIueehU7W17wuUfECZWtylvzvSTn4bHRBXDpulcD0';
+
+    // [2] PASTE CUSTOM 1-METER TERRAIN ASSET ID HERE (OR LEAVE NULL):
+    const CUSTOM_TERRAIN_ASSET_ID = 5822831;
+
+    // [3] VENUE CAMERA PRESETS (Defaults to Kicking Horse T1 South):
+    const VENUE_PRESETS = {
+      kicking_horse: { lon: -117.0405, lat: 51.2965, alt: 2520, heading: 222.0, pitch: -16.0 },
+      el_colorado:   { lon: -70.2950,  lat: -33.3550, alt: 4200, heading: 0.0,   pitch: -35.0 },
+      revelstoke:    { lon: -118.1320, lat: 50.9585, alt: 2450, heading: 135.0, pitch: -22.0 },
+      kirkwood:      { lon: -120.0725, lat: 38.6780, alt: 2850, heading: 195.0, pitch: -20.0 }
+    };
+
+    // [4] OPTIONAL LOCAL PYTHON BACKEND URL:
+    const BACKEND_URL = 'http://localhost:8000';
+
+    // =============================================================
+    // 1. CESIUM 3D VIEWER & NAVIGATION
+    // =============================================================
+    const viewer = new Cesium.Viewer('cesiumContainer', {
+      baseLayer: Cesium.ImageryLayer.fromWorldImagery(),
+      geocoder: true,
+      timeline: false,
+      animation: false,
+      baseLayerPicker: false,
+      contextOptions: { webgl: { preserveDrawingBuffer: true } }
+    });
+
+    viewer.scene.globe.depthTestAgainstTerrain = true;
+    viewer.scene.screenSpaceCameraController.enableCollisionDetection = true;
+    viewer.scene.screenSpaceCameraController.inertiaSpin = 0.85;
+    viewer.scene.screenSpaceCameraController.inertiaTranslate = 0.85;
+    viewer.scene.screenSpaceCameraController.inertiaZoom = 0.8;
+
+    if (CUSTOM_TERRAIN_ASSET_ID) {
+      Cesium.CesiumTerrainProvider.fromIonAssetId(CUSTOM_TERRAIN_ASSET_ID)
+        .then(p => viewer.terrainProvider = p)
+        .catch(() => viewer.terrain = Cesium.Terrain.fromWorldTerrain());
+    } else {
+      viewer.terrain = Cesium.Terrain.fromWorldTerrain();
+    }
+
+    function flyToVenue(key) {
+      const v = VENUE_PRESETS[key] || VENUE_PRESETS.kicking_horse;
+      viewer.camera.setView({
+        destination: Cesium.Cartesian3.fromDegrees(v.lon, v.lat, v.alt),
+        orientation: { heading: Cesium.Math.toRadians(v.heading), pitch: Cesium.Math.toRadians(v.pitch), roll: 0.0 }
+      });
+    }
+    flyToVenue('kicking_horse');
+
+    document.getElementById('venuePresetSelect').onchange = (e) => {
+      stopPov(false);
+      flyToVenue(e.target.value);
+    };
+
+    const hudReticle = document.getElementById('hudReticle');
+
+    document.getElementById('navFreeBtn').onclick = () => {
+      stopPov(false);
+      viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
+      hudReticle.innerHTML = "<b>Free 3D Orbit Unlocked:</b> Drag to pan, right-drag to zoom, Ctrl+drag (or middle-drag) to tilt & orbit.";
+    };
+
+    document.getElementById('navTopBtn').onclick = () => {
+      stopPov(false);
+      const target = startCarto || Cesium.Cartographic.fromCartesian(viewer.camera.position);
+      viewer.camera.flyTo({
+        destination: Cesium.Cartesian3.fromRadians(target.longitude, target.latitude, (target.height || 2400) + 1100),
+        orientation: { heading: 0, pitch: Cesium.Math.toRadians(-89.0), roll: 0 },
+        duration: 0.9
+      });
+    };
+
+    document.getElementById('navCorralBtn').onclick = () => {
+      stopPov(false);
+      if (!finishCarto || !startCarto) return alert("Set Start and Finish Gates first (or draw a custom line).");
+      const fPos = Cesium.Cartesian3.fromRadians(finishCarto.longitude, finishCarto.latitude, finishCarto.height + 2.5);
+      const sPos = Cesium.Cartesian3.fromRadians(startCarto.longitude, startCarto.latitude, startCarto.height);
+      const dist = Cesium.Cartesian3.distance(fPos, sPos);
+      const heading = computeBearingRad(finishCarto, startCarto);
+      viewer.camera.flyTo({
+        destination: fPos,
+        orientation: { heading, pitch: Cesium.Math.toRadians(Math.min(28, Math.atan2(startCarto.height - finishCarto.height, dist) * 180 / Math.PI)), roll: 0 },
+        duration: 0.9
+      });
+    };
+
+    document.getElementById('navStartBtn').onclick = () => {
+      stopPov(false);
+      if (!startCarto) return alert("Set Start Gate first (or draw a custom line).");
+      const sPos = Cesium.Cartesian3.fromRadians(startCarto.longitude, startCarto.latitude, startCarto.height + 2.5);
+      const heading = finishCarto ? computeBearingRad(startCarto, finishCarto) : viewer.camera.heading;
+      viewer.camera.flyTo({
+        destination: sPos,
+        orientation: { heading, pitch: Cesium.Math.toRadians(-30.0), roll: 0 },
+        duration: 0.9
+      });
+    };
+
+    function computeBearingRad(c1, c2) {
+      const dLon = c2.longitude - c1.longitude;
+      const y = Math.sin(dLon) * Math.cos(c2.latitude);
+      const x = Math.cos(c1.latitude) * Math.sin(c2.latitude) - Math.sin(c1.latitude) * Math.cos(c2.latitude) * Math.cos(dLon);
+      return Math.atan2(y, x);
+    }
+
+    // =============================================================
+    // 2. UNIFIED SURFACE PICKER & HEIGHT SAMPLER
+    // =============================================================
+    let reconstructedMeshPrimitive = null;
+    let drapedPrimitives = [];
+    let entities = [], scannedEntities = [], customPreviewEntities = [], landmarkMapEntities = [];
+
+    function isWinter3DMeshActive() {
+      return Boolean(reconstructedMeshPrimitive && reconstructedMeshPrimitive.show);
+    }
+
+    function pickSurfaceCartesian(windowPos) {
+      if (viewer.scene.pickPositionSupported) {
+        const depthPos = viewer.scene.pickPosition(windowPos);
+        if (Cesium.defined(depthPos)) {
+          const c = Cesium.Cartographic.fromCartesian(depthPos);
+          if (c && !isNaN(c.height) && c.height > -500 && c.height < 9000) {
+            return depthPos;
+          }
+        }
+      }
+      const ray = viewer.camera.getPickRay(windowPos);
+      return ray ? viewer.scene.globe.pick(ray, viewer.scene) : null;
+    }
+
+    async function sampleUnifiedSurface(cartographics) {
+      if (!cartographics.length) return cartographics;
+      try {
+        await Cesium.sampleTerrainMostDetailed(viewer.terrainProvider, cartographics);
+      } catch (e) {}
+
+      if (isWinter3DMeshActive() && typeof viewer.scene.clampToHeightMostDetailed === 'function') {
+        try {
+          const elevatedPts = cartographics.map(c =>
+            Cesium.Cartesian3.fromRadians(c.longitude, c.latitude, (c.height || 2400) + 1500.0)
+          );
+          const excludeList = [...drapedPrimitives, ...entities, ...scannedEntities, ...customPreviewEntities, ...landmarkMapEntities];
+          const clampedPts = await viewer.scene.clampToHeightMostDetailed(elevatedPts, excludeList);
+          clampedPts.forEach((pt, idx) => {
+            if (Cesium.defined(pt)) {
+              const clampedCarto = Cesium.Cartographic.fromCartesian(pt);
+              if (clampedCarto && !isNaN(clampedCarto.height)) cartographics[idx].height = clampedCarto.height;
+            }
+          });
+        } catch (err) {}
+      }
+      return cartographics;
+    }
+
+    // =============================================================
+    // 3. IN-BROWSER SKYLINE PITCH/COMPASS SOLVER & DRONE XMP PARSER
+    // =============================================================
+    async function extractDroneXmpPose(file) {
+      try {
+        const slice = file.slice(0, 98304);
+        const text = await slice.text();
+        if (!text.includes('drone-dji:')) return null;
+        const getTag = (name) => {
+          const m = text.match(new RegExp(`drone-dji:${name}="([^"]+)"`));
+          return m ? parseFloat(m[1]) : null;
+        };
+        const yaw = getTag('GimbalYawDegree');
+        const pitch = getTag('GimbalPitchDegree');
+        const roll = getTag('GimbalRollDegree') || 0.0;
+        const relAlt = getTag('RelativeAltitude');
+        const absAlt = getTag('AbsoluteAltitude');
+        if (yaw !== null && pitch !== null && !isNaN(yaw) && !isNaN(pitch)) {
+          return { yaw, pitch, roll, relAlt, absAlt };
+        }
+      } catch (e) {}
+      return null;
+    }
+
+    function loadImageElement(url) {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = reject;
+        img.src = url;
+      });
+    }
+
+    async function extractPhotoSkylineCurve(url, numSamples = 64) {
+      const img = await loadImageElement(url);
+      const natW = img.naturalWidth || 1600;
+      const natH = img.naturalHeight || 1200;
+      const cw = 256;
+      const ch = Math.max(96, Math.round(cw * (natH / natW)));
+
+      const canvas = document.createElement('canvas');
+      canvas.width = cw;
+      canvas.height = ch;
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      ctx.drawImage(img, 0, 0, cw, ch);
+      const data = ctx.getImageData(0, 0, cw, ch).data;
+
+      const rawV = new Float32Array(numSamples);
+      const colConf = new Float32Array(numSamples);
+      const topEnd = Math.max(3, Math.floor(ch * 0.10));
+      const scanStart = Math.max(4, Math.floor(ch * 0.05));
+      const scanEnd = Math.floor(ch * 0.82);
+
+      for (let i = 0; i < numSamples; i++) {
+        const x = Math.min(cw - 1, Math.round((i / (numSamples - 1)) * (cw - 1)));
+        let rSky = 0, gSky = 0, bSky = 0;
+        for (let y = 0; y < topEnd; y++) {
+          const idx = (y * cw + x) * 4;
+          rSky += data[idx]; gSky += data[idx + 1]; bSky += data[idx + 2];
+        }
+        rSky /= topEnd; gSky /= topEnd; bSky /= topEnd;
+        const skyLum = 0.299 * rSky + 0.587 * gSky + 0.114 * bSky;
+
+        let bestY = -1;
+        let bestScore = 0;
+
+        for (let y = scanStart; y < scanEnd; y++) {
+          const idx = (y * cw + x) * 4;
+          const idxUp = ((y - 2) * cw + x) * 4;
+          const idxDn = ((y + 2) * cw + x) * 4;
+
+          const r = data[idx], g = data[idx + 1], b = data[idx + 2];
+          const lumUp = 0.299 * data[idxUp] + 0.587 * data[idxUp + 1] + 0.114 * data[idxUp + 2];
+          const lumDn = 0.299 * data[idxDn] + 0.587 * data[idxDn + 1] + 0.114 * data[idxDn + 2];
+
+          const edgeMag = Math.abs(lumUp - lumDn);
+          const colorDiff = Math.hypot(r - rSky, g - gSky, b - bSky);
+          const blueDrop = Math.max(0, data[idxUp + 2] - data[idxDn + 2]);
+
+          // Strong transition away from upper sky color + local vertical edge
+          const score = edgeMag * 1.4 + colorDiff * 0.65 + blueDrop * 0.5;
+          if (colorDiff > 32 && edgeMag > 16 && score > bestScore) {
+            bestScore = score;
+            bestY = y;
+            // Stop at first clear sky-to-terrain horizon transition
+            if (colorDiff > 55 && edgeMag > 26) break;
+          }
+        }
+
+        // If upper sky itself is very dark (< 75 lum), camera is likely pointed at ground/trees without sky
+        if (bestY > 0 && skyLum > 85) {
+          rawV[i] = bestY / ch;
+          colConf[i] = Math.min(1.0, bestScore / 120.0);
+        } else {
+          rawV[i] = -1;
+          colConf[i] = 0;
+        }
+      }
+
+      // 3-point median filter to remove isolated noise/wires
+      const smoothV = new Float32Array(numSamples);
+      let validCount = 0;
+      let confSum = 0;
+      for (let i = 0; i < numSamples; i++) {
+        const vals = [];
+        for (let k = -1; k <= 1; k++) {
+          const j = Math.min(numSamples - 1, Math.max(0, i + k));
+          if (rawV[j] >= 0) vals.push(rawV[j]);
+        }
+        if (vals.length) {
+          vals.sort((a, b) => a - b);
+          smoothV[i] = vals[Math.floor(vals.length / 2)];
+          validCount++;
+          confSum += colConf[i];
+        } else {
+          smoothV[i] = -1;
+        }
+      }
+
+      const validRatio = validCount / numSamples;
+      const confidence = validRatio > 0.35 ? (confSum / Math.max(validCount, 1)) * validRatio : 0;
+      return { skylineV: smoothV, confidence, natW, natH };
+    }
+
+    async function buildTerrainHorizonLookup(latDeg, lonDeg, eyeAlt, centerHeadingDeg = null) {
+      const fullSweep = centerHeadingDeg === null;
+      const numRays = fullSweep ? 72 : 45;
+      const azStart = fullSweep ? 0 : centerHeadingDeg - 48.0;
+      const azSpan = fullSweep ? 360.0 : 96.0;
+      const dists = [150, 260, 400, 580, 800, 1050, 1350, 1700, 2100, 2600, 3200, 3900, 4800];
+
+      const mPerDegLat = 111320.0;
+      const mPerDegLon = 111320.0 * Math.cos(Cesium.Math.toRadians(latDeg));
+      const queryPts = [];
+      const rayAzimuths = [];
+
+      for (let r = 0; r < numRays; r++) {
+        const az = (azStart + (r / (fullSweep ? numRays : numRays - 1)) * azSpan + 360) % 360;
+        rayAzimuths.push(az);
+        const azRad = Cesium.Math.toRadians(az);
+        const sinA = Math.sin(azRad), cosA = Math.cos(azRad);
+        for (let d = 0; d < dists.length; d++) {
+          const pLat = latDeg + (dists[d] * cosA) / mPerDegLat;
+          const pLon = lonDeg + (dists[d] * sinA) / mPerDegLon;
+          queryPts.push(new Cesium.Cartographic(Cesium.Math.toRadians(pLon), Cesium.Math.toRadians(pLat), 0));
+        }
+      }
+
+      await sampleUnifiedSurface(queryPts);
+
+      const maxAngles = new Float32Array(numRays);
+      let ptr = 0;
+      for (let r = 0; r < numRays; r++) {
+        let maxAng = -Math.PI / 2;
+        for (let d = 0; d < dists.length; d++) {
+          const h = queryPts[ptr++].height;
+          if (!isNaN(h)) {
+            const ang = Math.atan2(h - eyeAlt, dists[d]);
+            if (ang > maxAng) maxAng = ang;
+          }
+        }
+        maxAngles[r] = maxAng;
+      }
+
+      return function getTerrainHorizonAngle(azDeg) {
+        const normAz = ((azDeg % 360) + 360) % 360;
+        if (fullSweep) {
+          const f = (normAz / 360.0) * numRays;
+          const i0 = Math.floor(f) % numRays;
+          const i1 = (i0 + 1) % numRays;
+          const frac = f - Math.floor(f);
+          return maxAngles[i0] * (1 - frac) + maxAngles[i1] * frac;
+        } else {
+          let rel = normAz - azStart;
+          while (rel < -180) rel += 360;
+          while (rel > 180) rel -= 360;
+          const f = Cesium.Math.clamp((rel / azSpan) * (numRays - 1), 0, numRays - 1);
+          const i0 = Math.floor(f);
+          const i1 = Math.min(numRays - 1, i0 + 1);
+          const frac = f - i0;
+          return maxAngles[i0] * (1 - frac) + maxAngles[i1] * frac;
+        }
+      };
+    }
+
+    async function solveSkylineCameraAngle(photoUrl, camCarto, initHeadingDeg, hasKnownHeading, fovDeg) {
+      const { skylineV, confidence, natW, natH } = await extractPhotoSkylineCurve(photoUrl, 64);
+      if (confidence < 0.14) {
+        return { success: false, reason: "low_sky_contrast" };
+      }
+
+      const latDeg = Cesium.Math.toDegrees(camCarto.latitude);
+      const lonDeg = Cesium.Math.toDegrees(camCarto.longitude);
+      const eyeAlt = camCarto.height;
+      const getHorizonAngle = await buildTerrainHorizonLookup(latDeg, lonDeg, eyeAlt, hasKnownHeading ? initHeadingDeg : null);
+
+      const aspect = natW / natH;
+      const halfRad = Cesium.Math.toRadians(fovDeg * 0.5);
+      const tanHalfX = aspect >= 1.0 ? Math.tan(halfRad) : Math.tan(halfRad) * aspect;
+      const tanHalfY = aspect >= 1.0 ? Math.tan(halfRad) / aspect : Math.tan(halfRad);
+      const numSamples = skylineV.length;
+
+      const uNorms = new Float32Array(numSamples);
+      const duDegs = new Float32Array(numSamples);
+      for (let i = 0; i < numSamples; i++) {
+        const uN = (i / (numSamples - 1)) - 0.5;
+        uNorms[i] = uN;
+        duDegs[i] = Cesium.Math.toDegrees(Math.atan(2.0 * uN * tanHalfX));
+      }
+
+      function evalLoss(hDeg, pDeg, rDeg) {
+        const pRad = Cesium.Math.toRadians(pDeg);
+        const tanRoll = Math.tan(Cesium.Math.toRadians(rDeg));
+        const denomY = 2.0 * tanHalfY;
+        let loss = 0;
+        let count = 0;
+
+        for (let i = 0; i < numSamples; i++) {
+          const targetV = skylineV[i];
+          if (targetV < 0.03 || targetV > 0.80) continue;
+          const elevAng = getHorizonAngle(hDeg + duDegs[i]);
+          const relPitch = elevAng - pRad;
+          const vPred = 0.5 - (Math.tan(relPitch) / denomY) + uNorms[i] * tanRoll;
+          const err = Math.abs(vPred - targetV);
+          // Huber-style robust error so minor tree/cloud outliers don't pull the mountain ridge
+          loss += err < 0.06 ? (err * err) : (0.06 * (2 * err - 0.06));
+          count++;
+        }
+        if (count < 15) return 1e6;
+        const reg = hasKnownHeading ? 0.00004 * Math.pow(hDeg - initHeadingDeg, 2) : 0;
+        return (loss / count) + reg;
+      }
+
+      let bestH = initHeadingDeg;
+      let bestP = 8.0;
+      let bestR = 0.0;
+      let bestLoss = Infinity;
+
+      if (!hasKnownHeading) {
+        // 360° coarse sweep when compass heading was stripped from EXIF
+        for (let h = 0; h < 360; h += 6) {
+          for (let p = -8; p <= 28; p += 4) {
+            const c = evalLoss(h, p, 0);
+            if (c < bestLoss) {
+              bestLoss = c;
+              bestH = h;
+              bestP = p;
+            }
+          }
+        }
+      } else {
+        // ±18° compass drift sweep + pitch sweep around EXIF heading
+        for (let dh = -18; dh <= 18; dh += 3) {
+          for (let p = -12; p <= 34; p += 3) {
+            const c = evalLoss(initHeadingDeg + dh, p, 0);
+            if (c < bestLoss) {
+              bestLoss = c;
+              bestH = initHeadingDeg + dh;
+              bestP = p;
+            }
+          }
+        }
+      }
+
+      // Fine coordinate refinement on heading, pitch, and roll
+      for (const [sh, sp, sr] of [[1.0, 1.0, 1.0], [0.25, 0.25, 0.3]]) {
+        let improved = true;
+        let guard = 0;
+        while (improved && guard++ < 25) {
+          improved = false;
+          for (const [dh, dp, dr] of [[sh,0,0],[-sh,0,0],[0,sp,0],[0,-sp,0],[0,0,sr],[0,0,-sr]]) {
+            const nr = bestR + dr;
+            if (Math.abs(nr) > 6.0) continue;
+            const c = evalLoss(bestH + dh, bestP + dp, nr);
+            if (c < bestLoss) {
+              bestLoss = c;
+              bestH += dh;
+              bestP += dp;
+              bestR = nr;
+              improved = true;
+            }
+          }
+        }
+      }
+
+      const rmsPct = Math.sqrt(Math.max(0, bestLoss)) * 100.0;
+      return {
+        success: rmsPct < 14.0,
+        headingDeg: ((bestH % 360) + 360) % 360,
+        pitchDeg: bestP,
+        rollDeg: bestR,
+        rmsPct
+      };
+    }
+
+    // =============================================================
+    // 4. MULTI-PHOTO VIEWPOINTS, 2-CLICK STANDPOINT & 3-POINT PnP LOCK
+    // =============================================================
+    let overviewLibrary = []; // { file, url, pose: { position, heading, pitch, roll, fov }, aligned: bool }
+    let activePhotoIndex = 0;
+    let activeTrajectoryPositions = [];
+    let activeLineColorCss = '#a855f7';
+    let lastAnalyzedFeatures = [];
+
+    const ghostOverlay = document.getElementById('ghostOverlay');
+    const opacitySlider = document.getElementById('opacitySlider');
+    const thumbBar = document.getElementById('photoThumbBar');
+    const exportOverviewBtn = document.getElementById('exportOverviewBtn');
+    const drapePhotoBtn = document.getElementById('drapePhotoBtn');
+    const drapeAllBtn = document.getElementById('drapeAllBtn');
+    const clearDrapesBtn = document.getElementById('clearDrapesBtn');
+    const drapeStatus = document.getElementById('drapeStatus');
+
+    opacitySlider.oninput = (e) => {
+      const val = e.target.value;
+      document.getElementById('opacityLabel').textContent = `${val}%`;
+      ghostOverlay.style.opacity = val / 100.0;
+    };
+
+    function saveCurrentCameraPose(index, markAligned = false) {
+      if (!overviewLibrary[index]) return;
+      const cam = viewer.camera;
+      overviewLibrary[index].pose = {
+        position: cam.position.clone(),
+        heading: cam.heading,
+        pitch: cam.pitch,
+        roll: cam.roll,
+        fov: cam.frustum.fov
+      };
+      if (markAligned) overviewLibrary[index].aligned = true;
+      renderThumbnailBadges();
+    }
+
+    function renderThumbnailBadges() {
+      Array.from(thumbBar.children).forEach((el, i) => {
+        const item = overviewLibrary[i];
+        if (!item) return;
+        el.style.border = i === activePhotoIndex ? '2px solid #38bdf8' : (item.aligned ? '2px solid #10b981' : '1px solid #555');
+        el.style.opacity = i === activePhotoIndex ? '1' : '0.78';
+        const badge = el.querySelector('.thumb-badge');
+        if (badge) {
+          badge.textContent = item.aligned ? `✓ #${i + 1} Ready` : `#${i + 1} Align`;
+          badge.className = item.aligned ? 'thumb-badge aligned' : 'thumb-badge';
+        }
+      });
+    }
+
+    document.getElementById('overviewPhotoUpload').onchange = async (e) => {
+      const files = Array.from(e.target.files);
+      if (!files.length) return;
+
+      overviewLibrary = files.map(f => ({
+        file: f,
+        url: URL.createObjectURL(f),
+        pose: null,
+        aligned: false
+      }));
+
+      thumbBar.innerHTML = '';
+      overviewLibrary.forEach((item, idx) => {
+        const wrap = document.createElement('div');
+        wrap.className = 'thumb-item';
+        wrap.title = `Click to switch 3D camera to Photo #${idx + 1}`;
+        wrap.innerHTML = `<img src="${item.url}"><div class="thumb-badge">#${idx + 1} Align</div>`;
+        wrap.onclick = () => selectOverviewPhoto(idx);
+        thumbBar.appendChild(wrap);
+      });
+
+      document.getElementById('alignToolsRow').style.display = 'flex';
+      exportOverviewBtn.style.display = 'flex';
+      drapePhotoBtn.style.display = 'flex';
+      if (overviewLibrary.length > 1) drapeAllBtn.style.display = 'flex';
+
+      await selectOverviewPhoto(0);
+    };
+
+    async function selectOverviewPhoto(idx) {
+      if (overviewLibrary[activePhotoIndex] && overviewLibrary[activePhotoIndex].pose) {
+        saveCurrentCameraPose(activePhotoIndex, false);
+      }
+
+      activePhotoIndex = idx;
+      const selected = overviewLibrary[idx];
+      renderThumbnailBadges();
+
+      ghostOverlay.src = selected.url;
+      opacitySlider.value = 55;
+      document.getElementById('opacityLabel').textContent = "55%";
+      ghostOverlay.style.opacity = 0.55;
+
+      const exifStatus = document.getElementById('exifStatus');
+
+      // 1. If this photo already has a saved 3D viewpoint, fly/snap directly to IT
+      if (selected.pose) {
+        viewer.camera.frustum.fov = selected.pose.fov;
+        viewer.camera.setView({
+          destination: selected.pose.position,
+          orientation: { heading: selected.pose.heading, pitch: selected.pose.pitch, roll: selected.pose.roll }
+        });
+        exifStatus.innerHTML = `<span style="color:#10b981;"><b>Photo #${idx + 1} Viewpoint Active.</b> Fine-tune with Nudge / 3-Point Lock or click Drape.</span>`;
+        return;
+      }
+
+      // 2. Otherwise read EXIF + Drone XMP metadata & run Skyline Pitch/Compass Auto-Fit
+      exifStatus.innerHTML = `<span style="color:#38bdf8;">Reading GPS & matching mountain skyline for Photo #${idx + 1}...</span>`;
+      try {
+        const [exif, droneXmp] = await Promise.all([
+          exifr.parse(selected.file, true),
+          extractDroneXmpPose(selected.file)
+        ]);
+
+        if (exif && typeof exif.latitude === 'number' && typeof exif.longitude === 'number') {
+          const groundSample = [new Cesium.Cartographic(Cesium.Math.toRadians(exif.longitude), Cesium.Math.toRadians(exif.latitude), 0)];
+          await sampleUnifiedSurface(groundSample);
+
+          const focal35 = exif.FocalLengthIn35mmFilm || (exif.FocalLength ? exif.FocalLength * 1.5 : null);
+          if (focal35 && focal35 > 10 && focal35 < 400) {
+            viewer.camera.frustum.fov = 2 * Math.atan(18.0 / focal35);
+          }
+          const fovDeg = Cesium.Math.toDegrees(viewer.camera.frustum.fov);
+
+          // Case A: Drone photo with exact gimbal XMP pitch/yaw/roll
+          if (droneXmp) {
+            const droneAlt = droneXmp.relAlt !== null
+              ? groundSample[0].height + Math.max(1.5, droneXmp.relAlt)
+              : Math.max((droneXmp.absAlt || exif.GPSAltitude || 0), groundSample[0].height + 2.0);
+
+            viewer.camera.setView({
+              destination: Cesium.Cartesian3.fromDegrees(exif.longitude, exif.latitude, droneAlt),
+              orientation: {
+                heading: Cesium.Math.toRadians(droneXmp.yaw),
+                pitch: Cesium.Math.toRadians(droneXmp.pitch),
+                roll: Cesium.Math.toRadians(droneXmp.roll)
+              }
+            });
+            saveCurrentCameraPose(idx, true);
+            exifStatus.innerHTML = `<span style="color:#10b981;"><b>Drone XMP Locked (#${idx + 1}):</b> Exact GPS + ${droneXmp.pitch.toFixed(1)}° gimbal pitch. Ready to Drape!</span>`;
+            return;
+          }
+
+          // Case B: Smartphone/Camera GPS photo -> run In-Browser Skyline Pitch & Compass Solver
+          const eyeAlt = groundSample[0].height + 2.0;
+          const camCarto = new Cesium.Cartographic(Cesium.Math.toRadians(exif.longitude), Cesium.Math.toRadians(exif.latitude), eyeAlt);
+          const rawHeading = exif.GPSImgDirection ?? exif.GPSDestBearing ?? null;
+          const hasKnownHeading = rawHeading !== null && !isNaN(rawHeading);
+          const seedHeading = hasKnownHeading ? rawHeading : Cesium.Math.toDegrees(viewer.camera.heading);
+
+          const skyFit = await solveSkylineCameraAngle(selected.url, camCarto, seedHeading, hasKnownHeading, fovDeg);
+
+          if (skyFit.success) {
+            viewer.camera.setView({
+              destination: Cesium.Cartesian3.fromDegrees(exif.longitude, exif.latitude, eyeAlt),
+              orientation: {
+                heading: Cesium.Math.toRadians(skyFit.headingDeg),
+                pitch: Cesium.Math.toRadians(skyFit.pitchDeg),
+                roll: Cesium.Math.toRadians(skyFit.rollDeg)
+              }
+            });
+            saveCurrentCameraPose(idx, true);
+            exifStatus.innerHTML = `<span style="color:#10b981;"><b>GPS + Skyline Auto-Fit (#${idx + 1}):</b> Pitch ${skyFit.pitchDeg.toFixed(1)}°, Heading ${Math.round(skyFit.headingDeg)}° (${skyFit.rmsPct.toFixed(1)}% fit). Fine-tune or Drape!</span>`;
+          } else {
+            // Fallback if cloudy/no sky visible: still move to exact GPS location
+            viewer.camera.setView({
+              destination: Cesium.Cartesian3.fromDegrees(exif.longitude, exif.latitude, eyeAlt),
+              orientation: { heading: Cesium.Math.toRadians(seedHeading), pitch: Cesium.Math.toRadians(10.0), roll: 0.0 }
+            });
+            saveCurrentCameraPose(idx, false);
+            exifStatus.innerHTML = `<span style="color:#f59e0b;"><b>GPS Location Set (#${idx + 1}):</b> Low sky contrast for auto-tilt. Use Nudge arrows or <b>🎯 3-Point Lock</b>.</span>`;
+          }
+          return;
+        }
+      } catch (err) {}
+
+      // 3. No GPS EXIF at all: lower ghost opacity to 25% so user can use 2-Click Standpoint or 3-Point Lock
+      opacitySlider.value = 25;
+      document.getElementById('opacityLabel').textContent = "25%";
+      ghostOverlay.style.opacity = 0.25;
+      exifStatus.innerHTML = `<span style="color:#fbbf24;"><b>Photo #${idx + 1} has no GPS EXIF:</b> Click <b>📍 2-Click Standpoint</b> on the map or <b>🎯 3-Point Landmark Lock</b>.</span>`;
+    }
+
+    // Manual trigger for Skyline Auto-Fit from current camera position
+    document.getElementById('autoSkylineBrowserBtn').onclick = async () => {
+      const selected = overviewLibrary[activePhotoIndex];
+      if (!selected) return alert("Load a photo first.");
+      const exifStatus = document.getElementById('exifStatus');
+      exifStatus.innerHTML = `<span style="color:#38bdf8;">Matching photo horizon to 3D terrain peaks...</span>`;
+
+      const camCarto = Cesium.Cartographic.fromCartesian(viewer.camera.position);
+      const currHeading = Cesium.Math.toDegrees(viewer.camera.heading);
+      const fovDeg = Cesium.Math.toDegrees(viewer.camera.frustum.fov);
+
+      const skyFit = await solveSkylineCameraAngle(selected.url, camCarto, currHeading, true, fovDeg);
+      if (skyFit.success) {
+        viewer.camera.setView({
+          destination: viewer.camera.position,
+          orientation: {
+            heading: Cesium.Math.toRadians(skyFit.headingDeg),
+            pitch: Cesium.Math.toRadians(skyFit.pitchDeg),
+            roll: Cesium.Math.toRadians(skyFit.rollDeg)
+          }
+        });
+        saveCurrentCameraPose(activePhotoIndex, true);
+        exifStatus.innerHTML = `<span style="color:#10b981;"><b>Skyline Auto-Fitted!</b> Pitch ${skyFit.pitchDeg.toFixed(1)}°, Heading ${Math.round(skyFit.headingDeg)}° (${skyFit.rmsPct.toFixed(1)}% error).</span>`;
+      } else {
+        exifStatus.innerHTML = `<span style="color:#f59e0b;">Could not isolate clear sky horizon — use <b>🎯 3-Point Landmark Lock</b> instead.</span>`;
+      }
+    };
+
+    // --- 2-Click Standpoint Tool (Click 1 = Where I Stood, Click 2 = What I Aimed At) ---
+    let twoClickStep = 0;
+    let standpointCarto = null;
+
+    document.getElementById('twoClickPoseBtn').onclick = () => {
+      if (!overviewLibrary[activePhotoIndex]) return alert("Load a photo first.");
+      isDrawingCustom = false;
+      pickMode = null;
+      twoClickStep = 1;
+      opacitySlider.value = 15;
+      document.getElementById('opacityLabel').textContent = "15%";
+      ghostOverlay.style.opacity = 0.15;
+      hudReticle.innerHTML = `<b>2-Click Standpoint (Step 1/2):</b> Click on the 3D map <b>WHERE YOU STOOD</b> to take Photo #${activePhotoIndex + 1}.`;
+    };
+
+    // --- Pure-Browser 3-Point Landmark Lock (Side-by-Side PnP Camera Solver) ---
+    let isLandmarkMode = false;
+    let photoLandmarks = [];
+    let mapLandmarks = [];
+    let awaitingMapClick = false;
+
+    const landmarkPhotoPane = document.getElementById('landmarkPhotoPane');
+    const landmarkImgWrapper = document.getElementById('landmarkImgWrapper');
+    const landmarkPhotoImg = document.getElementById('landmarkPhotoImg');
+    const landmarkPrompt = document.getElementById('landmarkPrompt');
+    const solveLandmarkBtn = document.getElementById('solveLandmarkBtn');
+
+    document.getElementById('landmarkAlignBtn').onclick = () => {
+      const activeItem = overviewLibrary[activePhotoIndex];
+      if (!activeItem) return alert("Load a photo first.");
+
+      isLandmarkMode = true;
+      isDrawingCustom = false;
+      pickMode = null;
+      twoClickStep = 0;
+      photoLandmarks = [];
+      mapLandmarks = [];
+      awaitingMapClick = false;
+      clearLandmarkPins();
+
+      ghostOverlay.style.opacity = 0;
+      opacitySlider.value = 0;
+      document.getElementById('opacityLabel').textContent = "0%";
+
+      landmarkPhotoImg.src = activeItem.url;
+      landmarkPhotoPane.style.display = 'flex';
+      landmarkPhotoPane.style.width = '46%';
+      solveLandmarkBtn.style.display = 'none';
+      landmarkPrompt.innerHTML = `Step 1/3: Click <b>Landmark #1</b> (peak/rock) on the <b>PHOTO</b>`;
+      setTimeout(() => viewer.resize(), 50);
+    };
+
+    function clearLandmarkPins() {
+      landmarkImgWrapper.querySelectorAll('.lm-pin').forEach(p => p.remove());
+      landmarkMapEntities.forEach(e => viewer.entities.remove(e));
+      landmarkMapEntities = [];
+    }
+
+    document.getElementById('resetLandmarkBtn').onclick = () => {
+      photoLandmarks = [];
+      mapLandmarks = [];
+      awaitingMapClick = false;
+      clearLandmarkPins();
+      solveLandmarkBtn.style.display = 'none';
+      landmarkPrompt.innerHTML = `Step 1/3: Click <b>Landmark #1</b> on the <b>PHOTO</b>`;
+    };
+
+    document.getElementById('cancelLandmarkBtn').onclick = closeLandmarkMode;
+
+    function closeLandmarkMode() {
+      isLandmarkMode = false;
+      awaitingMapClick = false;
+      clearLandmarkPins();
+      landmarkPhotoPane.style.display = 'none';
+      landmarkPhotoPane.style.width = '0%';
+      setTimeout(() => viewer.resize(), 50);
+    }
+
+    landmarkImgWrapper.onclick = (e) => {
+      if (!isLandmarkMode || awaitingMapClick) return;
+      const rect = landmarkPhotoImg.getBoundingClientRect();
+      const u = Cesium.Math.clamp((e.clientX - rect.left) / rect.width, 0, 1);
+      const v = Cesium.Math.clamp((e.clientY - rect.top) / rect.height, 0, 1);
+
+      const idx = photoLandmarks.length + 1;
+      photoLandmarks.push({ u, v });
+      awaitingMapClick = true;
+
+      const pin = document.createElement('div');
+      pin.className = 'lm-pin';
+      pin.style.left = `${u * 100}%`;
+      pin.style.top = `${v * 100}%`;
+      pin.textContent = idx;
+      landmarkImgWrapper.appendChild(pin);
+
+      landmarkPrompt.innerHTML = `Now click matching <b>Landmark #${idx}</b> on the <b>3D TERRAIN</b> →`;
+    };
+
+    solveLandmarkBtn.onclick = () => runLandmarkPoseSolver();
+
+    function runLandmarkPoseSolver() {
+      const n = Math.min(photoLandmarks.length, mapLandmarks.length);
+      if (n < 3) return alert("Pick at least 3 matching landmark pairs first.");
+
+      const natW = landmarkPhotoImg.naturalWidth || 1600;
+      const natH = landmarkPhotoImg.naturalHeight || 1200;
+      const aspect = natW / natH;
+
+      const cam = viewer.camera;
+      const initCarto = Cesium.Cartographic.fromCartesian(cam.position);
+      const initHeading = Cesium.Math.toDegrees(cam.heading);
+      const initPitch = Cesium.Math.toDegrees(cam.pitch);
+      const initRoll = Cesium.Math.toDegrees(cam.roll);
+      const initFov = Cesium.Math.toDegrees(cam.frustum.fov);
+
+      const mPerDegLat = 111320.0;
+      const mPerDegLon = 111320.0 * Math.cos(initCarto.latitude);
+
+      function projectError(params) {
+        const [dHeading, dPitch, rollDeg, fovDeg, dEast, dNorth, dUp] = params;
+        const clampedFov = Math.max(12.0, Math.min(100.0, fovDeg));
+        const lat = initCarto.latitude + (dNorth / mPerDegLat) * (Math.PI / 180);
+        const lon = initCarto.longitude + (dEast / mPerDegLon) * (Math.PI / 180);
+        const alt = initCarto.height + dUp;
+        const C = Cesium.Cartesian3.fromRadians(lon, lat, alt);
+
+        const up = Cesium.Ellipsoid.WGS84.geodeticSurfaceNormal(C, new Cesium.Cartesian3());
+        const east = Cesium.Cartesian3.normalize(Cesium.Cartesian3.cross(Cesium.Cartesian3.UNIT_Z, up, new Cesium.Cartesian3()), new Cesium.Cartesian3());
+        const north = Cesium.Cartesian3.cross(up, east, new Cesium.Cartesian3());
+
+        const hRad = Cesium.Math.toRadians(initHeading + dHeading);
+        const pRad = Cesium.Math.toRadians(initPitch + dPitch);
+        const rRad = Cesium.Math.toRadians(rollDeg);
+
+        const fEnu = new Cesium.Cartesian3(
+          Math.cos(pRad) * Math.sin(hRad),
+          Math.cos(pRad) * Math.cos(hRad),
+          Math.sin(pRad)
+        );
+        const fWorld = new Cesium.Cartesian3(
+          fEnu.x * east.x + fEnu.y * north.x + fEnu.z * up.x,
+          fEnu.x * east.y + fEnu.y * north.y + fEnu.z * up.y,
+          fEnu.x * east.z + fEnu.y * north.z + fEnu.z * up.z
+        );
+
+        const r0 = Cesium.Cartesian3.normalize(Cesium.Cartesian3.cross(fWorld, up, new Cesium.Cartesian3()), new Cesium.Cartesian3());
+        const u0 = Cesium.Cartesian3.cross(r0, fWorld, new Cesium.Cartesian3());
+
+        const cosR = Math.cos(rRad), sinR = Math.sin(rRad);
+        const rCam = Cesium.Cartesian3.add(
+          Cesium.Cartesian3.multiplyByScalar(r0, cosR, new Cesium.Cartesian3()),
+          Cesium.Cartesian3.multiplyByScalar(u0, sinR, new Cesium.Cartesian3()),
+          new Cesium.Cartesian3()
+        );
+        const uCam = Cesium.Cartesian3.add(
+          Cesium.Cartesian3.multiplyByScalar(r0, -sinR, new Cesium.Cartesian3()),
+          Cesium.Cartesian3.multiplyByScalar(u0, cosR, new Cesium.Cartesian3()),
+          new Cesium.Cartesian3()
+        );
+
+        const halfRad = Cesium.Math.toRadians(clampedFov * 0.5);
+        const tanHalfX = aspect >= 1.0 ? Math.tan(halfRad) : Math.tan(halfRad) * aspect;
+        const tanHalfY = aspect >= 1.0 ? Math.tan(halfRad) / aspect : Math.tan(halfRad);
+
+        let errSum = 0;
+        for (let i = 0; i < n; i++) {
+          const d = Cesium.Cartesian3.subtract(mapLandmarks[i], C, new Cesium.Cartesian3());
+          const zc = Cesium.Cartesian3.dot(d, fWorld);
+          if (zc <= 2.0) return 1e6;
+          const xc = Cesium.Cartesian3.dot(d, rCam);
+          const yc = Cesium.Cartesian3.dot(d, uCam);
+
+          const uPred = 0.5 + xc / (2.0 * zc * tanHalfX);
+          const vPred = 0.5 - yc / (2.0 * zc * tanHalfY);
+          const du = uPred - photoLandmarks[i].u;
+          const dv = vPred - photoLandmarks[i].v;
+          errSum += (du * du + dv * dv);
+        }
+
+        const reg = 1e-6 * (dEast * dEast + dNorth * dNorth + dUp * dUp) + 1e-5 * (rollDeg * rollDeg);
+        return (errSum / n) + reg;
+      }
+
+      let bestParams = [0, 0, initRoll, initFov, 0, 0, 0];
+      let bestCost = projectError(bestParams);
+      const stepScales = [
+        [8.0, 6.0, 2.0, 8.0, 35.0, 35.0, 15.0],
+        [2.5, 2.0, 0.8, 3.0, 12.0, 12.0, 5.0],
+        [0.7, 0.6, 0.3, 1.0, 4.0,  4.0,  2.0],
+        [0.15, 0.15, 0.1, 0.25, 1.0, 1.0, 0.5]
+      ];
+
+      for (const steps of stepScales) {
+        let improved = true;
+        let guard = 0;
+        while (improved && guard++ < 40) {
+          improved = false;
+          for (let d = 0; d < 7; d++) {
+            for (const dir of [-1, 1]) {
+              const cand = [...bestParams];
+              cand[d] += dir * steps[d];
+              const cost = projectError(cand);
+              if (cost < bestCost) {
+                bestCost = cost;
+                bestParams = cand;
+                improved = true;
+              }
+            }
+          }
+        }
+      }
+
+      const [dH, dP, optRoll, optFov, dE, dN, dU] = bestParams;
+      const finalLat = initCarto.latitude + (dN / mPerDegLat) * (Math.PI / 180);
+      const finalLon = initCarto.longitude + (dE / mPerDegLon) * (Math.PI / 180);
+      const finalAlt = initCarto.height + dU;
+
+      closeLandmarkMode();
+
+      viewer.camera.frustum.fov = Cesium.Math.toRadians(Math.max(12.0, Math.min(100.0, optFov)));
+      viewer.camera.setView({
+        destination: Cesium.Cartesian3.fromRadians(finalLon, finalLat, finalAlt),
+        orientation: {
+          heading: Cesium.Math.toRadians(initHeading + dH),
+          pitch: Cesium.Math.toRadians(initPitch + dP),
+          roll: Cesium.Math.toRadians(optRoll)
+        }
+      });
+
+      saveCurrentCameraPose(activePhotoIndex, true);
+      opacitySlider.value = 50;
+      document.getElementById('opacityLabel').textContent = "50%";
+      ghostOverlay.style.opacity = 0.50;
+
+      const rmsPct = Math.sqrt(bestCost) * 100;
+      document.getElementById('exifStatus').innerHTML =
+        `<span style="color:#10b981;"><b>Photo #${activePhotoIndex + 1} Locked!</b> (${n}-point fit: ${rmsPct.toFixed(2)}% error). Ready to Drape!</span>`;
+      hudReticle.innerHTML = `<b>Photo #${activePhotoIndex + 1} Aligned!</b> Check alignment with Ghost Opacity, then click <b>🌐 Drape Active</b>.`;
+    }
+
+    window.nudgeCamera = (dHeadingDeg, dPitchDeg, dFovDeg) => {
+      const cam = viewer.camera;
+      if (dFovDeg !== 0) cam.frustum.fov = Cesium.Math.clamp(cam.frustum.fov + Cesium.Math.toRadians(dFovDeg), 0.1, 1.8);
+      cam.setView({
+        destination: cam.position,
+        orientation: { heading: cam.heading + Cesium.Math.toRadians(dHeadingDeg), pitch: cam.pitch + Cesium.Math.toRadians(dPitchDeg), roll: cam.roll }
+      });
+      saveCurrentCameraPose(activePhotoIndex, true);
+    };
+
+    // --- 3D Terrain Photo-Draping Engine (Single & Multi-Angle Batch) ---
+    async function drapePhotoAtIndex(idx) {
+      const item = overviewLibrary[idx];
+      if (!item || !item.pose) return false;
+
+      viewer.camera.frustum.fov = item.pose.fov;
+      viewer.camera.setView({
+        destination: item.pose.position,
+        orientation: { heading: item.pose.heading, pitch: item.pose.pitch, roll: item.pose.roll }
+      });
+      viewer.scene.render();
+
+      const imgObj = await loadImageElement(item.url);
+      const natW = imgObj.naturalWidth || 1600;
+      const natH = imgObj.naturalHeight || 1200;
+      const vpRect = document.getElementById('cesiumWrapper').getBoundingClientRect();
+      const coverScale = Math.max(vpRect.width / natW, vpRect.height / natH);
+      const offsetX = (vpRect.width - natW * coverScale) / 2;
+      const offsetY = (vpRect.height - natH * coverScale) / 2;
+
+      const GRID_U = 46, GRID_V = 46;
+      const positions = [], sts = [], worldPts = [];
+      const gridIndices = Array.from({ length: GRID_V }, () => new Array(GRID_U).fill(-1));
+      let vertCounter = 0;
+
+      for (let iv = 0; iv < GRID_V; iv++) {
+        const v = iv / (GRID_V - 1);
+        const winY = ((1.0 - v) * natH) * coverScale + offsetY;
+        for (let iu = 0; iu < GRID_U; iu++) {
+          const u = iu / (GRID_U - 1);
+          const winX = (u * natW) * coverScale + offsetX;
+          const ray = viewer.camera.getPickRay(new Cesium.Cartesian2(winX, winY));
+          const hit = ray ? viewer.scene.globe.pick(ray, viewer.scene) : null;
+
+          if (Cesium.defined(hit)) {
+            const norm = Cesium.Ellipsoid.WGS84.geodeticSurfaceNormal(hit, new Cesium.Cartesian3());
+            const liftMeters = 0.40 + (drapedPrimitives.length * 0.25);
+            const lifted = Cesium.Cartesian3.add(hit, Cesium.Cartesian3.multiplyByScalar(norm, liftMeters, new Cesium.Cartesian3()), new Cesium.Cartesian3());
+            positions.push(lifted.x, lifted.y, lifted.z);
+            sts.push(u, v);
+            worldPts[vertCounter] = lifted;
+            gridIndices[iv][iu] = vertCounter++;
+          }
+        }
+      }
+
+      const indices = [];
+      const MAX_EDGE_METERS = 220.0;
+      for (let iv = 0; iv < GRID_V - 1; iv++) {
+        for (let iu = 0; iu < GRID_U - 1; iu++) {
+          const i00 = gridIndices[iv][iu], i10 = gridIndices[iv][iu + 1];
+          const i01 = gridIndices[iv + 1][iu], i11 = gridIndices[iv + 1][iu + 1];
+          if (i00 !== -1 && i10 !== -1 && i11 !== -1 &&
+              Cesium.Cartesian3.distance(worldPts[i00], worldPts[i10]) < MAX_EDGE_METERS &&
+              Cesium.Cartesian3.distance(worldPts[i10], worldPts[i11]) < MAX_EDGE_METERS) {
+            indices.push(i00, i10, i11);
+          }
+          if (i00 !== -1 && i11 !== -1 && i01 !== -1 &&
+              Cesium.Cartesian3.distance(worldPts[i00], worldPts[i11]) < MAX_EDGE_METERS &&
+              Cesium.Cartesian3.distance(worldPts[i11], worldPts[i01]) < MAX_EDGE_METERS) {
+            indices.push(i00, i11, i01);
+          }
+        }
+      }
+
+      if (indices.length < 30) return false;
+
+      const geometry = new Cesium.Geometry({
+        attributes: {
+          position: new Cesium.GeometryAttribute({ componentDatatype: Cesium.ComponentDatatype.DOUBLE, componentsPerAttribute: 3, values: new Float64Array(positions) }),
+          st: new Cesium.GeometryAttribute({ componentDatatype: Cesium.ComponentDatatype.FLOAT, componentsPerAttribute: 2, values: new Float32Array(sts) })
+        },
+        indices: new Uint32Array(indices),
+        primitiveType: Cesium.PrimitiveType.TRIANGLES,
+        boundingSphere: Cesium.BoundingSphere.fromVertices(positions)
+      });
+
+      const prim = new Cesium.Primitive({
+        geometryInstances: new Cesium.GeometryInstance({ geometry }),
+        appearance: new Cesium.MaterialAppearance({ material: Cesium.Material.fromType('Image', { image: item.url }), flat: true, translucent: false }),
+        asynchronous: false
+      });
+
+      viewer.scene.primitives.add(prim);
+      drapedPrimitives.push(prim);
+      return true;
+    }
+
+    drapePhotoBtn.onclick = async () => {
+      const item = overviewLibrary[activePhotoIndex];
+      if (!item) return alert("Load a photo first.");
+      if (!item.aligned) {
+        const proceed = confirm("This photo hasn't been locked with Auto-Fit Skyline or 3-Point Landmark Lock yet. Drape anyway?");
+        if (!proceed) return;
+      }
+      saveCurrentCameraPose(activePhotoIndex, true);
+      const ok = await drapePhotoAtIndex(activePhotoIndex);
+      if (!ok) {
+        drapeStatus.innerHTML = `<span style="color:#ef4444;">Failed: Aim camera at mountain terrain before draping.</span>`;
+        return;
+      }
+      opacitySlider.value = 0;
+      document.getElementById('opacityLabel').textContent = "0%";
+      ghostOverlay.style.opacity = 0;
+      clearDrapesBtn.style.display = 'flex';
+      drapeStatus.innerHTML = `<b>Draped ${drapedPrimitives.length} photo angle(s) onto 3D terrain!</b> Orbit freely in 3D.`;
+    };
+
+    drapeAllBtn.onclick = async () => {
+      const alignedIndices = overviewLibrary.map((p, i) => p.aligned ? i : -1).filter(i => i !== -1);
+      if (!alignedIndices.length) {
+        return alert("Align at least one photo first using GPS Auto-Fit, 2-Click Standpoint, or 3-Point Landmark Lock.");
+      }
+
+      drapedPrimitives.forEach(p => viewer.scene.primitives.remove(p));
+      drapedPrimitives = [];
+      let count = 0;
+
+      for (const idx of alignedIndices) {
+        await selectOverviewPhoto(idx);
+        if (await drapePhotoAtIndex(idx)) count++;
+      }
+
+      await selectOverviewPhoto(alignedIndices[0]);
+      opacitySlider.value = 0;
+      document.getElementById('opacityLabel').textContent = "0%";
+      ghostOverlay.style.opacity = 0;
+      clearDrapesBtn.style.display = 'flex';
+      drapeStatus.innerHTML = `<b>Combined ${count} aligned photo angles onto 3D terrain!</b> Orbit freely in 3D.`;
+    };
+
+    clearDrapesBtn.onclick = () => {
+      drapedPrimitives.forEach(p => viewer.scene.primitives.remove(p));
+      drapedPrimitives = [];
+      clearDrapesBtn.style.display = 'none';
+      drapeStatus.textContent = "3D photo drapes cleared.";
+    };
+
+    exportOverviewBtn.onclick = async () => {
+      if (!overviewLibrary[activePhotoIndex]) return;
+      const img = await loadImageElement(overviewLibrary[activePhotoIndex].url);
+      const natW = img.naturalWidth, natH = img.naturalHeight;
+      if (!natW || !natH) return;
+
+      if (overviewLibrary[activePhotoIndex].pose) {
+        const p = overviewLibrary[activePhotoIndex].pose;
+        viewer.camera.frustum.fov = p.fov;
+        viewer.camera.setView({ destination: p.position, orientation: { heading: p.heading, pitch: p.pitch, roll: p.roll } });
+      }
+
+      const outCanvas = document.createElement('canvas');
+      outCanvas.width = natW; outCanvas.height = natH;
+      const ctx = outCanvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, natW, natH);
+
+      const vpRect = document.getElementById('cesiumWrapper').getBoundingClientRect();
+      const coverScale = Math.max(vpRect.width / natW, vpRect.height / natH);
+      const offsetX = (vpRect.width - natW * coverScale) / 2;
+      const offsetY = (vpRect.height - natH * coverScale) / 2;
+
+      const toPhotoPixel = (cartesianPos) => {
+        const win = Cesium.SceneTransforms.wgs84ToWindowCoordinates(viewer.scene, cartesianPos);
+        if (!win) return null;
+        return { x: (win.x - offsetX) / coverScale, y: (win.y - offsetY) / coverScale };
+      };
+
+      if (activeTrajectoryPositions.length > 1) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.strokeStyle = activeLineColorCss;
+        ctx.lineWidth = Math.max(natW / 180, 6);
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.85)';
+        ctx.shadowBlur = 10;
+        let started = false;
+        activeTrajectoryPositions.forEach(pos => {
+          const pt = toPhotoPixel(pos);
+          if (!pt) return;
+          if (!started) { ctx.moveTo(pt.x, pt.y); started = true; }
+          else { ctx.lineTo(pt.x, pt.y); }
+        });
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      const drawBadge = (cartesianPos, label, color) => {
+        const pt = toPhotoPixel(cartesianPos);
+        if (!pt) return;
+        const r = Math.max(natW / 160, 10);
+        ctx.fillStyle = color;
+        ctx.beginPath(); ctx.arc(pt.x, pt.y, r, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = '#ffffff'; ctx.lineWidth = Math.max(r * 0.25, 2); ctx.stroke();
+
+        const fontSize = Math.max(Math.round(natW / 65), 18);
+        ctx.font = `bold ${fontSize}px sans-serif`;
+        ctx.fillStyle = '#ffffff';
+        ctx.shadowColor = 'rgba(0,0,0,0.9)'; ctx.shadowBlur = 6;
+        ctx.fillText(label, pt.x + r * 1.4, pt.y + fontSize * 0.35);
+      };
+
+      if (startCarto) drawBadge(Cesium.Cartesian3.fromRadians(startCarto.longitude, startCarto.latitude, startCarto.height), "START", "#10b981");
+      if (finishCarto) drawBadge(Cesium.Cartesian3.fromRadians(finishCarto.longitude, finishCarto.latitude, finishCarto.height), "FINISH", "#ef4444");
+      lastAnalyzedFeatures.forEach((f, idx) => {
+        const cPos = Cesium.Cartesian3.fromRadians(f.coord.longitude, f.coord.latitude, f.coord.height);
+        drawBadge(cPos, `Air ${idx + 1}: ${f.drop.toFixed(1)}m (${f.pitch.toFixed(0)}°)`, f.good ? "#10b981" : "#ef4444");
+      });
+
+      const link = document.createElement('a');
+      link.download = `freeride_scout_line_photo${activePhotoIndex + 1}.jpg`;
+      link.href = outCanvas.toDataURL('image/jpeg', 0.95);
+      link.click();
+    };
+
+    // =============================================================
+    // 5. ADJACENT RIDGE SWEEP 3D MESH BUILDER (OPTIONAL SERVER)
+    // =============================================================
+    const meshStatus = document.getElementById('meshStatus');
+    const toggleMeshBtn = document.getElementById('toggleMeshBtn');
+    const removeMeshBtn = document.getElementById('removeMeshBtn');
+
+    document.getElementById('ridgeBatchUpload').onchange = async (e) => {
+      const ridgeFiles = Array.from(e.target.files);
+      if (!ridgeFiles.length) return;
+      if (ridgeFiles.length < 2) {
+        alert("Select at least 2 overlapping ridge photos (15–30 recommended).");
+        return;
+      }
+
+      meshStatus.innerHTML = `<span style="color:#38bdf8;">Uploading ${ridgeFiles.length} ridge photos to local server...</span>`;
+
+      const formData = new FormData();
+      ridgeFiles.forEach(f => formData.append('photos', f));
+      const anchorCarto = startCarto || Cesium.Cartographic.fromCartesian(viewer.camera.position);
+      formData.append('anchor_lat', Cesium.Math.toDegrees(anchorCarto.latitude));
+      formData.append('anchor_lon', Cesium.Math.toDegrees(anchorCarto.longitude));
+      formData.append('anchor_elev', anchorCarto.height);
+
+      try {
+        const res = await fetch(`${BACKEND_URL}/reconstruct-3d-face`, { method: 'POST', body: formData });
+        if (!res.ok) throw new Error(`Server status ${res.status}`);
+        const data = await res.json();
+
+        if (reconstructedMeshPrimitive) {
+          viewer.scene.primitives.remove(reconstructedMeshPrimitive);
+          reconstructedMeshPrimitive = null;
+        }
+
+        const position = Cesium.Cartesian3.fromDegrees(data.lon, data.lat, data.elevation);
+        const hpr = new Cesium.HeadingPitchRoll(Cesium.Math.toRadians(data.heading || 0), 0, 0);
+        const modelMatrix = Cesium.Transforms.headingPitchRollToFixedFrame(position, hpr);
+
+        reconstructedMeshPrimitive = await Cesium.Model.fromGltfAsync({
+          url: `${BACKEND_URL}${data.glb_url}?t=${Date.now()}`,
+          modelMatrix: modelMatrix,
+          scale: data.scale || 1.0
+        });
+        viewer.scene.primitives.add(reconstructedMeshPrimitive);
+
+        toggleMeshBtn.style.display = 'flex';
+        removeMeshBtn.style.display = 'flex';
+        meshStatus.innerHTML = `<span style="color:#10b981;"><b>Winter 3D Mesh Active!</b> (${data.engine}: ${data.point_count.toLocaleString()} vertices).</span>`;
+      } catch (err) {
+        meshStatus.innerHTML = `<span style="color:#f59e0b;">Backend server offline. Start <code>uvicorn scout_server:app</code> to build ridge meshes, or use Card 1's <b>🌐 Drape All Aligned</b> in standalone mode.</span>`;
+      } finally {
+        e.target.value = '';
+      }
+    };
+
+    toggleMeshBtn.onclick = () => {
+      if (!reconstructedMeshPrimitive) return;
+      reconstructedMeshPrimitive.show = !reconstructedMeshPrimitive.show;
+      toggleMeshBtn.textContent = reconstructedMeshPrimitive.show ? "👁️ Hide 3D Mesh" : "👁️ Show 3D Mesh";
+    };
+
+    removeMeshBtn.onclick = () => {
+      if (!reconstructedMeshPrimitive) return;
+      viewer.scene.primitives.remove(reconstructedMeshPrimitive);
+      reconstructedMeshPrimitive = null;
+      toggleMeshBtn.style.display = 'none';
+      removeMeshBtn.style.display = 'none';
+      meshStatus.textContent = "Reconstructed 3D mesh removed.";
+    };
+
+    // =============================================================
+    // 6. AUTOMATED 1KM SNODAS + 14-DAY WIND-DRIFT TELEMETRY
+    // =============================================================
+    let autoStormWindRad = null;
+    let autoTransportIntensity = 0;
+
+    async function autoSyncSnowAndWind(lat, lon, elevationMeters = null) {
+      const status = document.getElementById('weatherStatus');
+      status.innerHTML = `<span style="color:#38bdf8;">Syncing high-res snowpack & 14-day storm wind history...</span>`;
+
+      try {
+        const elevParam = elevationMeters ? `&elevation=${Math.round(elevationMeters)}` : '';
+        const meteoUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(4)}&longitude=${lon.toFixed(4)}${elevParam}&hourly=snowfall,snow_depth,wind_speed_10m,wind_direction_10m&past_days=14&forecast_days=1&timezone=auto`;
+        const res = await fetch(meteoUrl);
+        const data = await res.json();
+        const h = data.hourly;
+
+        if (!h || !h.time) throw new Error("No hourly telemetry");
+
+        const validDepths = h.snow_depth.filter(d => d !== null);
+        let bestBaseDepth = validDepths.length ? validDepths[validDepths.length - 1] : 1.6;
+        let sourceTag = "Elevation-Downscaled";
+
+        const isNorthAmerica = (lat >= 24.5 && lat <= 53.5 && lon >= -130.0 && lon <= -62.0);
+        if (isNorthAmerica) {
+          try {
+            const snodasUrl = `https://mapservices.weather.noaa.gov/raster/rest/services/snow/NOHRSC_Snow_Analysis/MapServer/identify?f=json&geometry=${lon},${lat}&geometryType=esriGeometryPoint&sr=4326&layers=all:0&tolerance=1&mapExtent=${lon-0.05},${lat-0.05},${lon+0.05},${lat+0.05}&imageDisplay=400,400,96&returnGeometry=false`;
+            const snodasRes = await fetch(snodasUrl);
+            const snodasData = await snodasRes.json();
+            if (snodasData.results && snodasData.results.length > 0) {
+              const rawVal = parseFloat(snodasData.results[0].attributes['Pixel Value']);
+              if (!isNaN(rawVal) && rawVal > 0) {
+                bestBaseDepth = rawVal > 25 ? rawVal / 1000.0 : rawVal;
+                sourceTag = "NOAA SNODAS 1km";
+              }
+            }
+          } catch (e) {}
+        }
+
+        const last24Snow = h.snowfall.slice(-24).reduce((sum, val) => sum + (val || 0), 0);
+
+        let sinSum = 0, cosSum = 0, totalWeight = 0;
+        for (let i = 0; i < h.time.length; i++) {
+          const snow = h.snowfall[i] || 0;
+          const windSpd = h.wind_speed_10m[i] || 0;
+          const windDir = h.wind_direction_10m[i];
+          if (windDir === null) continue;
+
+          let weight = 0;
+          if (snow > 0) weight += snow * 15;
+          if (windSpd > 25) weight += (windSpd - 25) * 0.4;
+
+          if (weight > 0) {
+            const rad = Cesium.Math.toRadians(windDir);
+            sinSum += Math.sin(rad) * weight;
+            cosSum += Math.cos(rad) * weight;
+            totalWeight += weight;
+          }
+        }
+
+        if (totalWeight > 0) {
+          autoStormWindRad = Math.atan2(sinSum, cosSum);
+          if (autoStormWindRad < 0) autoStormWindRad += 2 * Math.PI;
+          autoTransportIntensity = Math.min(1.0, totalWeight / 150.0);
+        }
+
+        document.getElementById('snowDepth').value = bestBaseDepth.toFixed(2);
+        document.getElementById('newSnow').value = Math.round(last24Snow * 10);
+
+        const condSelect = document.getElementById('snowCondition');
+        if (last24Snow >= 2.5) condSelect.value = 'powder';
+        else if (autoTransportIntensity > 0.5) condSelect.value = 'firm';
+        else condSelect.value = 'crust';
+
+        const windDeg = autoStormWindRad !== null ? Math.round(Cesium.Math.toDegrees(autoStormWindRad)) : '--';
+        status.innerHTML = `<span style="color:#10b981;"><b>${sourceTag}:</b> ${bestBaseDepth.toFixed(2)}m base | ${Math.round(last24Snow*10)}cm 24h | Storm Wind: <b>${windDeg}°</b></span>`;
+      } catch (e) {
+        status.innerHTML = `<span style="color:#f59e0b;">Offline mode: Using manual snowpack values.</span>`;
+      }
+    }
+
+    function getCellDriftOffset(grid, r, c, baseSnow) {
+      if (autoStormWindRad === null || r === 0 || r >= grid.length - 1 || c === 0 || c >= grid[0].length - 1) return 0;
+      const dCol = Math.round(Math.sin(autoStormWindRad));
+      const dRow = -Math.round(Math.cos(autoStormWindRad));
+      const upR = Math.min(Math.max(r + dRow, 0), grid.length - 1);
+      const upC = Math.min(Math.max(c + dCol, 0), grid[0].length - 1);
+
+      const shelterDelta = grid[upR][upC].height - grid[r][c].height;
+      if (shelterDelta > 1.0) return Math.min(baseSnow * 0.45, shelterDelta * 0.25 * autoTransportIntensity);
+      if (shelterDelta < -1.0) return Math.max(-baseSnow * 0.40, shelterDelta * 0.20 * autoTransportIntensity);
+      return 0;
+    }
+
+    // =============================================================
+    // 7. 3-METER TRIANGLE SLOPE, ASPECT & DRIFT PROBE
+    // =============================================================
+    async function inspectPointTerrain(carto) {
+      const latDeg = Cesium.Math.toDegrees(carto.latitude);
+      const lonDeg = Cesium.Math.toDegrees(carto.longitude);
+      const dLat = 2.0 / 111320.0;
+      const dLon = 2.0 / (111320.0 * Math.cos(carto.latitude));
+
+      const pts = [
+        new Cesium.Cartographic(carto.longitude, carto.latitude, carto.height),
+        new Cesium.Cartographic(carto.longitude, carto.latitude + dLat, carto.height),
+        new Cesium.Cartographic(carto.longitude + dLon, carto.latitude - dLat, carto.height),
+        new Cesium.Cartographic(carto.longitude - dLon, carto.latitude - dLat, carto.height)
+      ];
+
+      await sampleUnifiedSurface(pts);
+      const centerZ = pts[0].height;
+      const dzNorth = (pts[1].height - (pts[2].height + pts[3].height) / 2.0) / 4.0;
+      const dzEast = (pts[2].height - pts[3].height) / 4.0;
+
+      const gradMag = Math.hypot(dzNorth, dzEast);
+      const slopeDeg = Math.atan(gradMag) * (180 / Math.PI);
+      const aspectDeg = (Math.atan2(-dzEast, -dzNorth) * (180 / Math.PI) + 360) % 360;
+      const dirs = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+      const dirLabel = dirs[Math.round(aspectDeg / 45) % 8];
+
+      const baseSnow = parseFloat(document.getElementById('snowDepth').value) || 1.8;
+      let driftDelta = 0;
+      if (autoStormWindRad !== null) {
+        const windFromDeg = Cesium.Math.toDegrees(autoStormWindRad);
+        const angleDiff = Math.abs(((aspectDeg - (windFromDeg + 180) + 540) % 360) - 180);
+        if (angleDiff < 55) driftDelta = baseSnow * 0.28 * autoTransportIntensity;
+        else if (angleDiff > 125) driftDelta = -baseSnow * 0.25 * autoTransportIntensity;
+      }
+      const estLocalSnow = Math.max(0.1, baseSnow + driftDelta);
+      const driftTag = driftDelta >= 0 ? `+${driftDelta.toFixed(2)}m wind load` : `${driftDelta.toFixed(2)}m wind scour`;
+
+      hudReticle.innerHTML =
+        `<b>3D Surface Probe:</b> Slope: <b style="color:#38bdf8;">${slopeDeg.toFixed(1)}°</b> (${dirLabel} ${Math.round(aspectDeg)}°) | Elev: <b>${centerZ.toFixed(1)}m</b><br>` +
+        `Est. Local Snowpack: <b style="color:#10b981;">${estLocalSnow.toFixed(2)}m</b> (${driftTag}) • ${latDeg.toFixed(5)}, ${lonDeg.toFixed(5)}`;
+    }
+
+    // =============================================================
+    // 8. 3D BEACON GATES, CATMULL-ROM SMOOTHING & CUSTOM LINE DRAWER
+    // =============================================================
+    let startCarto = null, finishCarto = null, pickMode = null;
+    let isDrawingCustom = false;
+    let customWaypoints = [];
+
+    function placeGateBeacon(carto, labelText, cssColor) {
+      const groundPos = Cesium.Cartesian3.fromRadians(carto.longitude, carto.latitude, carto.height);
+      const norm = Cesium.Ellipsoid.WGS84.geodeticSurfaceNormal(groundPos, new Cesium.Cartesian3());
+      const topPos = Cesium.Cartesian3.add(groundPos, Cesium.Cartesian3.multiplyByScalar(norm, 3.8, new Cesium.Cartesian3()), new Cesium.Cartesian3());
+      const color = Cesium.Color.fromCssColorString(cssColor);
+
+      entities.push(viewer.entities.add({
+        position: groundPos,
+        point: { pixelSize: 10, color, outlineColor: Cesium.Color.WHITE, outlineWidth: 2 }
+      }));
+      entities.push(viewer.entities.add({
+        polyline: { positions: [groundPos, topPos], width: 4, material: color }
+      }));
+      entities.push(viewer.entities.add({
+        position: topPos,
+        point: { pixelSize: 12, color, outlineColor: Cesium.Color.WHITE, outlineWidth: 2 },
+        label: {
+          text: `${labelText} (${Math.round(carto.height)}m)`,
+          font: "12px bold sans-serif",
+          fillColor: Cesium.Color.WHITE,
+          showBackground: true,
+          backgroundColor: Cesium.Color.BLACK.withAlpha(0.75),
+          verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+          pixelOffset: new Cesium.Cartesian2(0, -10)
+        }
+      }));
+    }
+
+    async function smoothAndClampPath(rawCartos) {
+      if (rawCartos.length < 2) return [];
+      const rawCartesians = rawCartos.map(c => Cesium.Cartesian3.fromRadians(c.longitude, c.latitude, c.height));
+
+      let totalDist = 0;
+      const times = [0];
+      for (let i = 1; i < rawCartesians.length; i++) {
+        totalDist += Math.max(1.0, Cesium.Cartesian3.distance(rawCartesians[i - 1], rawCartesians[i]));
+        times.push(totalDist);
+      }
+
+      const spline = new Cesium.CatmullRomSpline({ times, points: rawCartesians });
+      const sampleCount = Math.max(20, Math.min(240, Math.ceil(totalDist / 2.5)));
+      const denseCartos = [];
+
+      for (let i = 0; i <= sampleCount; i++) {
+        const t = (i / sampleCount) * totalDist;
+        const pt = spline.evaluate(t);
+        const c = Cesium.Cartographic.fromCartesian(pt);
+        c.height = 0;
+        denseCartos.push(c);
+      }
+
+      await sampleUnifiedSurface(denseCartos);
+      return denseCartos.map(c => Cesium.Cartesian3.fromRadians(c.longitude, c.latitude, c.height + 0.65));
+    }
+
+    const drawCustomBtn = document.getElementById('drawCustomBtn');
+    const undoCustomBtn = document.getElementById('undoCustomBtn');
+
+    drawCustomBtn.onclick = async () => {
+      if (!isDrawingCustom) {
+        isDrawingCustom = true;
+        pickMode = null;
+        twoClickStep = 0;
+        customWaypoints = [];
+        clearLineEntities();
+        drawCustomBtn.textContent = "✅ Finish & Analyze My Line";
+        drawCustomBtn.className = "btn-amber";
+        undoCustomBtn.style.display = "flex";
+        hudReticle.innerHTML = "<b>Custom Line Mode:</b> Click waypoints from top to bottom on the 3D terrain or draped photo.";
+      } else {
+        if (customWaypoints.length < 2) {
+          alert("Click at least 2 points (top to bottom) to draw your line.");
+          return;
+        }
+        isDrawingCustom = false;
+        drawCustomBtn.textContent = "✏️ Draw My Own Line";
+        drawCustomBtn.className = "btn-cyan";
+        undoCustomBtn.style.display = "none";
+        await analyzeCustomLine(customWaypoints);
+      }
+    };
+
+    undoCustomBtn.onclick = () => {
+      if (!customWaypoints.length) return;
+      customWaypoints.pop();
+      renderCustomPreview();
+    };
+
+    function renderCustomPreview() {
+      customPreviewEntities.forEach(e => viewer.entities.remove(e));
+      customPreviewEntities = [];
+      if (!customWaypoints.length) return;
+
+      const positions = customWaypoints.map(c => Cesium.Cartesian3.fromRadians(c.longitude, c.latitude, c.height + 0.8));
+      customWaypoints.forEach((c, idx) => {
+        customPreviewEntities.push(viewer.entities.add({
+          position: Cesium.Cartesian3.fromRadians(c.longitude, c.latitude, c.height + 0.8),
+          point: { pixelSize: 9, color: idx === 0 ? Cesium.Color.LIME : Cesium.Color.CYAN, outlineColor: Cesium.Color.BLACK, outlineWidth: 1 }
+        }));
+      });
+
+      if (positions.length >= 2) {
+        customPreviewEntities.push(viewer.entities.add({
+          polyline: {
+            positions,
+            width: 5,
+            material: new Cesium.PolylineGlowMaterialProperty({ glowPower: 0.25, color: Cesium.Color.fromCssColorString('#38bdf8') })
+          }
+        }));
+      }
+    }
+
+    async function analyzeCustomLine(waypoints) {
+      hudReticle.textContent = "Smoothing curve & analyzing snowpack along your custom line...";
+
+      const denseCartos = [];
+      for (let i = 0; i < waypoints.length - 1; i++) {
+        const cA = Cesium.Cartesian3.fromRadians(waypoints[i].longitude, waypoints[i].latitude, waypoints[i].height);
+        const cB = Cesium.Cartesian3.fromRadians(waypoints[i + 1].longitude, waypoints[i + 1].latitude, waypoints[i + 1].height);
+        const segDist = Cesium.Cartesian3.distance(cA, cB);
+        const steps = Math.max(2, Math.ceil(segDist / 6.0));
+        for (let s = 0; s < steps; s++) {
+          const lerped = Cesium.Cartesian3.lerp(cA, cB, s / steps, new Cesium.Cartesian3());
+          const carto = Cesium.Cartographic.fromCartesian(lerped);
+          carto.height = 0;
+          denseCartos.push(carto);
+        }
+      }
+      const lastWp = waypoints[waypoints.length - 1];
+      denseCartos.push(new Cesium.Cartographic(lastWp.longitude, lastWp.latitude, 0));
+      await sampleUnifiedSurface(denseCartos);
+
+      startCarto = denseCartos[0];
+      finishCarto = denseCartos[denseCartos.length - 1];
+      autoSyncSnowAndWind(Cesium.Math.toDegrees(startCarto.latitude), Cesium.Math.toDegrees(startCarto.longitude), startCarto.height);
+
+      const maxDrop = parseFloat(document.getElementById('maxDrop').value);
+      const baseSnow = parseFloat(document.getElementById('snowDepth').value);
+      const rider80 = maxDrop * 0.80;
+      const winterMeshActive = isWinter3DMeshActive();
+
+      const cStart = Cesium.Cartesian3.fromRadians(startCarto.longitude, startCarto.latitude, startCarto.height);
+      const cFinish = Cesium.Cartesian3.fromRadians(finishCarto.longitude, finishCarto.latitude, finishCarto.height);
+      const avgTan = (startCarto.height - finishCarto.height) / Math.max(Cesium.Cartesian3.distance(cStart, cFinish), 1.0);
+
+      const detectedFeatures = [];
+      for (let i = 0; i < denseCartos.length - 2; i++) {
+        const p1 = denseCartos[i], p2 = denseCartos[i + 1], p3 = denseCartos[i + 2];
+        const c1 = Cesium.Cartesian3.fromRadians(p1.longitude, p1.latitude, p1.height);
+        const c2 = Cesium.Cartesian3.fromRadians(p2.longitude, p2.latitude, p2.height);
+        const c3 = Cesium.Cartesian3.fromRadians(p3.longitude, p3.latitude, p3.height);
+
+        const hDist = Cesium.Cartesian3.distance(c1, c2);
+        const vDrop = p1.height - p2.height;
+        const excessDrop = vDrop - (hDist * avgTan);
+        const winterDrop = winterMeshActive ? Math.max(0, excessDrop) : Math.max(0, excessDrop - (baseSnow * 0.25));
+
+        if (winterDrop >= 1.4) {
+          const pitch = Math.atan2(p2.height - p3.height, Cesium.Cartesian3.distance(c2, c3)) * (180 / Math.PI);
+          const isGood = (winterDrop <= rider80) && (pitch >= 31 && pitch <= 46);
+          detectedFeatures.push({ drop: winterDrop, pitch, good: isGood, coord: p1 });
+          i += 1;
+        }
+      }
+
+      clearLineEntities();
+      activeLineColorCss = '#38bdf8';
+      activeTrajectoryPositions = await smoothAndClampPath(denseCartos);
+      lastAnalyzedFeatures = detectedFeatures;
+
+      placeGateBeacon(startCarto, "START", "#10b981");
+      placeGateBeacon(finishCarto, "FINISH", "#ef4444");
+
+      entities.push(viewer.entities.add({
+        polyline: {
+          positions: activeTrajectoryPositions,
+          width: 5,
+          material: new Cesium.PolylineGlowMaterialProperty({ glowPower: 0.3, color: Cesium.Color.fromCssColorString('#38bdf8') })
+        }
+      }));
+
+      detectedFeatures.forEach((f, idx) => {
+        entities.push(viewer.entities.add({
+          position: Cesium.Cartesian3.fromRadians(f.coord.longitude, f.coord.latitude, f.coord.height + 1.0),
+          point: { pixelSize: 11, color: f.good ? Cesium.Color.LIME : Cesium.Color.RED, outlineColor: Cesium.Color.BLACK, outlineWidth: 2 },
+          label: { text: `Air ${idx + 1}: ${f.drop.toFixed(1)}m (${f.pitch.toFixed(0)}°)`, font: "12px bold sans-serif", verticalOrigin: Cesium.VerticalOrigin.BOTTOM, pixelOffset: new Cesium.Cartesian2(0, -10) }
+        }));
+      });
+
+      setupPovPlayback();
+      updateScoreCard("Custom Rider Line (IFSA Evaluation)", detectedFeatures, Math.max(0, waypoints.length - 3));
+      hudReticle.innerHTML = `<b>Custom Line Analyzed!</b> Detected ${detectedFeatures.length} cliff feature(s) along your path.`;
+    }
+
+    // =============================================================
+    // 9. GATES, CLIFF SCANNER, AI A* SOLVER & CLICK HANDLER
+    // =============================================================
+    document.getElementById('setStartBtn').onclick = () => {
+      isDrawingCustom = false; twoClickStep = 0; pickMode = 'start';
+      hudReticle.innerHTML = "<b>Click summit ridge for Start Gate.</b>";
+    };
+    document.getElementById('setFinishBtn').onclick = () => {
+      isDrawingCustom = false; twoClickStep = 0; pickMode = 'finish';
+      hudReticle.innerHTML = "<b>Click finish arena for Finish Gate.</b>";
+    };
+
+    function clearLineEntities() {
+      entities.forEach(e => viewer.entities.remove(e));
+      customPreviewEntities.forEach(e => viewer.entities.remove(e));
+      entities = [];
+      customPreviewEntities = [];
+    }
+
+    document.getElementById('clearBtn').onclick = () => {
+      stopPov(true);
+      clearLineEntities();
+      scannedEntities.forEach(e => viewer.entities.remove(e));
+      scannedEntities = [];
+      startCarto = finishCarto = null;
+      customWaypoints = [];
+      activeTrajectoryPositions = [];
+      lastAnalyzedFeatures = [];
+      isDrawingCustom = false;
+      twoClickStep = 0;
+      drawCustomBtn.textContent = "✏️ Draw My Own Line";
+      drawCustomBtn.className = "btn-cyan";
+      undoCustomBtn.style.display = "none";
+      document.getElementById('outputCard').style.display = 'none';
+      document.getElementById('povControlsBox').style.display = 'none';
+      hudReticle.textContent = "Lines & pins cleared.";
+    };
+
+    const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
+    handler.setInputAction(async click => {
+      const cartesian = pickSurfaceCartesian(click.position);
+      if (!Cesium.defined(cartesian)) return;
+
+      const carto = Cesium.Cartographic.fromCartesian(cartesian);
+      await sampleUnifiedSurface([carto]);
+      const snappedCartesian = Cesium.Cartesian3.fromRadians(carto.longitude, carto.latitude, carto.height);
+
+      // 1. 3-Point Landmark Lock Mode (Map Click)
+      if (isLandmarkMode) {
+        if (!awaitingMapClick) {
+          landmarkPrompt.innerHTML = `Click the next landmark on the <b>PHOTO</b> first (left panel)!`;
+          return;
+        }
+        const idx = mapLandmarks.length + 1;
+        mapLandmarks.push(snappedCartesian);
+        awaitingMapClick = false;
+
+        landmarkMapEntities.push(viewer.entities.add({
+          position: snappedCartesian,
+          point: { pixelSize: 12, color: Cesium.Color.fromCssColorString('#38bdf8'), outlineColor: Cesium.Color.WHITE, outlineWidth: 2 },
+          label: { text: `#${idx}`, font: "13px bold sans-serif", verticalOrigin: Cesium.VerticalOrigin.BOTTOM, pixelOffset: new Cesium.Cartesian2(0, -10) }
+        }));
+
+        if (mapLandmarks.length >= 3) {
+          solveLandmarkBtn.style.display = 'flex';
+          landmarkPrompt.innerHTML = `<b>${mapLandmarks.length} pairs locked!</b> Click <b>✅ Lock 3D Pose Now</b> (or add a 4th landmark).`;
+        } else {
+          landmarkPrompt.innerHTML = `Step ${idx + 1}/3: Click <b>Landmark #${idx + 1}</b> on the <b>PHOTO</b>`;
+        }
+        return;
+      }
+
+      // 2. 2-Click Standpoint Mode
+      if (twoClickStep === 1) {
+        standpointCarto = carto;
+        twoClickStep = 2;
+        hudReticle.innerHTML = `<b>2-Click Standpoint (Step 2/2):</b> Now click on the <b>MOUNTAIN FACE</b> where your camera was aimed.`;
+        return;
+      }
+      if (twoClickStep === 2) {
+        twoClickStep = 0;
+        const eyePos = Cesium.Cartesian3.fromRadians(standpointCarto.longitude, standpointCarto.latitude, standpointCarto.height + 2.2);
+        const horizDist = Math.max(10.0, Cesium.Cartesian3.distance(eyePos, snappedCartesian));
+        const pitchRad = Math.atan2(carto.height - (standpointCarto.height + 2.2), horizDist);
+        const headingRad = computeBearingRad(standpointCarto, carto);
+
+        viewer.camera.setView({
+          destination: eyePos,
+          orientation: { heading: headingRad, pitch: pitchRad, roll: 0.0 }
+        });
+        saveCurrentCameraPose(activePhotoIndex, false);
+        opacitySlider.value = 50;
+        document.getElementById('opacityLabel').textContent = "50%";
+        ghostOverlay.style.opacity = 0.50;
+        document.getElementById('exifStatus').innerHTML =
+          `<span style="color:#38bdf8;"><b>Standpoint Set!</b> Click <b>🪄 Auto-Fit Skyline</b> or <b>🎯 3-Point Landmark Lock</b> to snap peaks.</span>`;
+        hudReticle.innerHTML = `Camera moved to your photo spot! Use <b>🪄 Auto-Fit Skyline</b> or <b>🎯 3-Point Landmark Lock</b>.`;
+        return;
+      }
+
+      // 3. Custom Line Waypoint Mode
+      if (isDrawingCustom) {
+        customWaypoints.push(carto);
+        renderCustomPreview();
+        hudReticle.innerHTML = `<b>Custom Waypoint #${customWaypoints.length} added.</b> Click next point or click <b>✅ Finish & Analyze My Line</b>.`;
+        return;
+      }
+
+      // 4. Start Gate Placement
+      if (pickMode === 'start') {
+        startCarto = carto;
+        placeGateBeacon(carto, "START", "#10b981");
+        pickMode = null;
+        hudReticle.innerHTML = "Start Gate locked! Now click <b>Set Finish Gate</b>.";
+        autoSyncSnowAndWind(Cesium.Math.toDegrees(carto.latitude), Cesium.Math.toDegrees(carto.longitude), carto.height);
+        return;
+      }
+
+      // 5. Finish Gate Placement
+      if (pickMode === 'finish') {
+        finishCarto = carto;
+        placeGateBeacon(carto, "FINISH", "#ef4444");
+        pickMode = null;
+        hudReticle.innerHTML = "Gates locked! Click <b>⚡ AI Optimal Line</b> or <b>🔍 Scan All Cliffs</b>.";
+        return;
+      }
+
+      // 6. Default: 3-Meter Slope, Aspect & Snow Drift Probe
+      await inspectPointTerrain(carto);
+    }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+
+    async function sampleCorridorGrid(rows, cols, maxWidth) {
+      const cStart = Cesium.Cartesian3.fromRadians(startCarto.longitude, startCarto.latitude, startCarto.height);
+      const cFinish = Cesium.Cartesian3.fromRadians(finishCarto.longitude, finishCarto.latitude, finishCarto.height);
+      const downVec = Cesium.Cartesian3.subtract(cFinish, cStart, new Cesium.Cartesian3());
+      const normal = Cesium.Ellipsoid.WGS84.geodeticSurfaceNormal(cStart, new Cesium.Cartesian3());
+      const latVec = Cesium.Cartesian3.normalize(Cesium.Cartesian3.cross(downVec, normal, new Cesium.Cartesian3()), new Cesium.Cartesian3());
+
+      const grid = [], queryPts = [];
+      for (let r = 0; r < rows; r++) {
+        grid[r] = [];
+        const prog = r / (rows - 1);
+        const center = Cesium.Cartesian3.lerp(cStart, cFinish, prog, new Cesium.Cartesian3());
+        let width = maxWidth;
+        if (prog < 0.15) width = Cesium.Math.lerp(30.0, maxWidth, prog / 0.15);
+        else if (prog > 0.85) width = Cesium.Math.lerp(maxWidth, 25.0, (prog - 0.85) / 0.15);
+
+        const halfW = width / 2.0;
+        for (let c = 0; c < cols; c++) {
+          const f = (c - (cols - 1) / 2) / ((cols - 1) / 2);
+          const pos = Cesium.Cartesian3.add(center, Cesium.Cartesian3.multiplyByScalar(latVec, f * halfW, new Cesium.Cartesian3()), new Cesium.Cartesian3());
+          const pt = Cesium.Cartographic.fromCartesian(pos);
+          pt.height = 0;
+          grid[r][c] = pt;
+          queryPts.push(pt);
+        }
+      }
+      await sampleUnifiedSurface(queryPts);
+      return grid;
+    }
+
+    document.getElementById('scanVenueBtn').onclick = async () => {
+      if (!startCarto || !finishCarto) return alert("Set Start and Finish Gates first.");
+      hudReticle.textContent = "Scanning face corridor for cliff bands...";
+      const baseSnow = parseFloat(document.getElementById('snowDepth').value);
+      const winterMeshActive = isWinter3DMeshActive();
+      const ROWS = 28, COLS = 11;
+      const grid = await sampleCorridorGrid(ROWS, COLS, 160.0);
+
+      const cStart = Cesium.Cartesian3.fromRadians(startCarto.longitude, startCarto.latitude, startCarto.height);
+      const cFinish = Cesium.Cartesian3.fromRadians(finishCarto.longitude, finishCarto.latitude, finishCarto.height);
+      const avgTan = (startCarto.height - finishCarto.height) / Math.max(Cesium.Cartesian3.distance(cStart, cFinish), 1.0);
+
+      scannedEntities.forEach(e => viewer.entities.remove(e));
+      scannedEntities = [];
+      let count = 0;
+
+      for (let r = 1; r < ROWS - 2; r++) {
+        for (let c = 0; c < COLS; c++) {
+          const p1 = grid[r][c], p2 = grid[r + 1][c], p3 = grid[r + 2][c];
+          const hDist = Cesium.Cartesian3.distance(
+            Cesium.Cartesian3.fromRadians(p1.longitude, p1.latitude, p1.height),
+            Cesium.Cartesian3.fromRadians(p2.longitude, p2.latitude, p2.height)
+          );
+          const excessDrop = (p1.height - p2.height) - (hDist * avgTan);
+          if (excessDrop >= 1.4) {
+            let winterDrop = excessDrop;
+            if (!winterMeshActive) {
+              const lipDrift = getCellDriftOffset(grid, r, c, baseSnow);
+              const landDrift = getCellDriftOffset(grid, r + 1, c, baseSnow);
+              winterDrop = Math.max(1.0, excessDrop - (landDrift - lipDrift));
+            }
+            const pitch = Math.atan2(p2.height - p3.height, Cesium.Cartesian3.distance(
+              Cesium.Cartesian3.fromRadians(p2.longitude, p2.latitude, p2.height),
+              Cesium.Cartesian3.fromRadians(p3.longitude, p3.latitude, p3.height)
+            )) * (180 / Math.PI);
+
+            let color = Cesium.Color.YELLOW.withAlpha(0.75), tag = "Punchy";
+            if (pitch >= 33 && pitch <= 44) { color = Cesium.Color.LIME.withAlpha(0.85); tag = "Stomp"; }
+            else if (pitch < 28) { color = Cesium.Color.RED.withAlpha(0.85); tag = "Flat"; }
+
+            scannedEntities.push(viewer.entities.add({
+              position: Cesium.Cartesian3.fromRadians(p1.longitude, p1.latitude, p1.height + 0.8),
+              point: { pixelSize: 9, color: color, outlineColor: Cesium.Color.BLACK, outlineWidth: 1 },
+              label: { text: `${winterDrop.toFixed(1)}m (${tag} ${pitch.toFixed(0)}°)`, font: "10px bold sans-serif", verticalOrigin: Cesium.VerticalOrigin.BOTTOM, pixelOffset: new Cesium.Cartesian2(0, -8) }
+            }));
+            count++;
+          }
+        }
+      }
+      hudReticle.innerHTML = `Scan complete: Found <b>${count} cliff features</b> across corridor.`;
+    };
+
+    document.getElementById('solveBtn').onclick = async () => {
+      if (!startCarto || !finishCarto) return alert("Set Start and Finish Gates first.");
+      hudReticle.textContent = "Solving AI optimal IFSA line...";
+
+      const maxDrop = parseFloat(document.getElementById('maxDrop').value);
+      const baseSnow = parseFloat(document.getElementById('snowDepth').value);
+      const cond = document.getElementById('snowCondition').value;
+      const rider80 = maxDrop * 0.80;
+      const winterMeshActive = isWinter3DMeshActive();
+
+      const condMults = {
+        firm: { dropScale: 1.0, landMin: 34, landMax: 42 },
+        powder: { dropScale: 1.15, landMin: 29, landMax: 45 },
+        crust: { dropScale: 0.82, landMin: 35, landMax: 40 }
+      }[cond];
+
+      const ROWS = 28, COLS = 11;
+      const grid = await sampleCorridorGrid(ROWS, COLS, 160.0);
+
+      const cStart = Cesium.Cartesian3.fromRadians(startCarto.longitude, startCarto.latitude, startCarto.height);
+      const cFinish = Cesium.Cartesian3.fromRadians(finishCarto.longitude, finishCarto.latitude, finishCarto.height);
+      const avgTan = (startCarto.height - finishCarto.height) / Math.max(Cesium.Cartesian3.distance(cStart, cFinish), 1.0);
+
+      const pq = [{ r: 0, c: Math.floor(COLS / 2), cost: 0, path: [{ r: 0, c: Math.floor(COLS / 2) }], features: [], lateralMoves: 0 }];
+      const visited = new Map();
+      let best = null;
+
+      while (pq.length > 0) {
+        pq.sort((a, b) => a.cost - b.cost);
+        const curr = pq.shift();
+        const key = `${curr.r},${curr.c}`;
+        if (visited.has(key) && visited.get(key) <= curr.cost) continue;
+        visited.set(key, curr.cost);
+        if (curr.r === ROWS - 1) { best = curr; break; }
+
+        const nextR = curr.r + 1;
+        for (let dc of [-1, 0, 1]) {
+          const nextC = curr.c + dc;
+          if (nextC < 0 || nextC >= COLS) continue;
+          const p1 = grid[curr.r][curr.c], p2 = grid[nextR][nextC];
+          const vDrop = p1.height - p2.height;
+          if (vDrop <= 0) continue;
+
+          const hDist = Cesium.Cartesian3.distance(
+            Cesium.Cartesian3.fromRadians(p1.longitude, p1.latitude, p1.height),
+            Cesium.Cartesian3.fromRadians(p2.longitude, p2.latitude, p2.height)
+          );
+
+          const lipDrift = getCellDriftOffset(grid, curr.r, curr.c, baseSnow);
+          const landDrift = getCellDriftOffset(grid, nextR, nextC, baseSnow);
+          let winterDrop = winterMeshActive
+            ? Math.max(0, vDrop - hDist * avgTan)
+            : Math.max(0, (vDrop - hDist * avgTan) - (landDrift - lipDrift));
+
+          let stepCost = hDist;
+          if (lipDrift < -baseSnow * 0.22) stepCost += 25.0;
+
+          let feat = null;
+          let pitch = 36.0;
+          if (nextR + 1 < ROWS) {
+            const p3 = grid[nextR + 1][nextC];
+            pitch = Math.atan2(p2.height - p3.height, Cesium.Cartesian3.distance(
+              Cesium.Cartesian3.fromRadians(p2.longitude, p2.latitude, p2.height),
+              Cesium.Cartesian3.fromRadians(p3.longitude, p3.latitude, p3.height)
+            )) * (180 / Math.PI);
+          }
+
+          if (winterDrop >= 1.4) {
+            if (winterDrop > rider80 * condMults.dropScale) stepCost += 5000;
+            else if (pitch >= condMults.landMin && pitch <= condMults.landMax) {
+              stepCost -= winterDrop * 90;
+              feat = { drop: winterDrop, pitch, good: true, coord: p1 };
+            } else if (pitch < 28) {
+              stepCost += 2000;
+              feat = { drop: winterDrop, pitch, good: false, coord: p1 };
+            }
+          }
+
+          if (dc !== 0) stepCost += (feat && feat.good) ? 2.5 : 8.5;
+          if (curr.r > ROWS * 0.8 && winterDrop > 3.0) stepCost += 400;
+
+          pq.push({
+            r: nextR, c: nextC, cost: curr.cost + stepCost,
+            path: [...curr.path, { r: nextR, c: nextC }],
+            features: feat ? [...curr.features, feat] : curr.features,
+            lateralMoves: curr.lateralMoves + (dc !== 0 ? 1 : 0)
+          });
+        }
+      }
+
+      if (!best) return alert("No rideable line found.");
+
+      const rawPathCartos = [startCarto, ...best.path.map(i => grid[i.r][i.c]), finishCarto];
+      activeLineColorCss = '#a855f7';
+      activeTrajectoryPositions = await smoothAndClampPath(rawPathCartos);
+      lastAnalyzedFeatures = best.features;
+
+      entities.push(viewer.entities.add({
+        polyline: {
+          positions: activeTrajectoryPositions,
+          width: 5,
+          material: new Cesium.PolylineGlowMaterialProperty({ glowPower: 0.3, color: Cesium.Color.fromCssColorString('#a855f7') })
+        }
+      }));
+
+      best.features.forEach((f, idx) => {
+        entities.push(viewer.entities.add({
+          position: Cesium.Cartesian3.fromRadians(f.coord.longitude, f.coord.latitude, f.coord.height + 1.0),
+          point: { pixelSize: 11, color: f.good ? Cesium.Color.LIME : Cesium.Color.RED, outlineColor: Cesium.Color.BLACK, outlineWidth: 2 },
+          label: { text: `Air ${idx+1}: ${f.drop.toFixed(1)}m (${f.pitch.toFixed(0)}°)`, font: "12px bold sans-serif", verticalOrigin: Cesium.VerticalOrigin.BOTTOM, pixelOffset: new Cesium.Cartesian2(0, -10) }
+        }));
+      });
+
+      if (overviewLibrary.length && drapedPrimitives.length === 0) {
+        opacitySlider.value = 45;
+        document.getElementById('opacityLabel').textContent = "45%";
+        ghostOverlay.style.opacity = 0.45;
+      }
+
+      setupPovPlayback();
+      updateScoreCard("AI Optimal IFSA Line", best.features, best.lateralMoves);
+      hudReticle.innerHTML = `<b>Winning IFSA Line Solved!</b> Smoothed onto terrain surface.`;
+    };
+
+    function updateScoreCard(title, features, lateralMoves) {
+      const clean = features.filter(f => f.good).length;
+      const flat = features.filter(f => !f.good).length;
+      const lineScore = Math.min(19.5, 14.0 + features.length * 1.5);
+      const airScore = Math.min(20.0, 11.0 + clean * 3.5 - flat * 4.0);
+      const fluidScore = Math.max(9.0, 19.0 - lateralMoves * 0.35);
+      const controlScore = Math.max(8.5, 19.5 - flat * 4.5);
+      const totalOI = (lineScore + airScore + fluidScore + controlScore + 18.0).toFixed(1);
+
+      document.getElementById('outputTitle').textContent = title;
+      document.getElementById('scoreVal').textContent = `${Math.min(99.0, totalOI)} / 100`;
+      document.getElementById('lineVal').textContent = `${lineScore.toFixed(1)} / 20`;
+      document.getElementById('airVal').textContent = `${airScore.toFixed(1)} / 20 (${clean} stomped)`;
+      document.getElementById('fluidVal').textContent = `${fluidScore.toFixed(1)} / 20`;
+      document.getElementById('controlVal').textContent = `${controlScore.toFixed(1)} / 20`;
+      document.getElementById('featureList').innerHTML = features.map((f, i) =>
+        `• Air ${i + 1}: <b>${f.drop.toFixed(1)}m cliff</b> → ${f.pitch.toFixed(0)}° (${f.good ? '<span style="color:#4ade80;">Stomp</span>' : '<span style="color:#ef4444;">Caution</span>'})`
+      ).join('<br>') || "High-speed fluid fall-line carve.";
+
+      document.getElementById('outputCard').style.display = 'block';
+    }
+
+    // =============================================================
+    // 10. SILKY-SMOOTH VARIABLE-SPEED 3D POV FLYTHROUGH (NO JUMPING)
+    // =============================================================
+    let isPlayingPov = false;
+    let povNormalizedProgress = 0.0;
+    let povSpeedMultiplier = 1.0;
+    let totalLineDistanceMeters = 300.0;
+    let lastTickMs = null;
+    let povListener = null;
+    let smoothedHeading = null;
+    let smoothedPitch = null;
+
+    const povControlsBox = document.getElementById('povControlsBox');
+    const playPovBtn = document.getElementById('playPovBtn');
+    const resetPovBtn = document.getElementById('resetPovBtn');
+    const povSpeedSlider = document.getElementById('povSpeedSlider');
+    const povSpeedLabel = document.getElementById('povSpeedLabel');
+    const povScrubber = document.getElementById('povScrubber');
+    const povProgressLabel = document.getElementById('povProgressLabel');
+
+    function setupPovPlayback() {
+      if (activeTrajectoryPositions.length < 2) return;
+      totalLineDistanceMeters = 0;
+      for (let i = 0; i < activeTrajectoryPositions.length - 1; i++) {
+        totalLineDistanceMeters += Cesium.Cartesian3.distance(activeTrajectoryPositions[i], activeTrajectoryPositions[i + 1]);
+      }
+      totalLineDistanceMeters = Math.max(totalLineDistanceMeters, 20.0);
+      povNormalizedProgress = 0.0;
+      smoothedHeading = null;
+      smoothedPitch = null;
+      povScrubber.value = 0;
+      povProgressLabel.textContent = "0%";
+      povControlsBox.style.display = 'block';
+    }
+
+    function positionCameraAlongLine(normProgress, instantSnap = false) {
+      if (activeTrajectoryPositions.length < 2) return;
+      const maxIdx = activeTrajectoryPositions.length - 1;
+      const exactIdx = Cesium.Math.clamp(normProgress * maxIdx, 0, maxIdx - 0.001);
+      const i0 = Math.floor(exactIdx);
+      const frac = exactIdx - i0;
+
+      const currPos = Cesium.Cartesian3.lerp(activeTrajectoryPositions[i0], activeTrajectoryPositions[i0 + 1], frac, new Cesium.Cartesian3());
+      const lookIdx = Math.min(maxIdx, i0 + 6);
+      const lookPos = activeTrajectoryPositions[lookIdx];
+
+      const c1 = Cesium.Cartographic.fromCartesian(currPos);
+      const c2 = Cesium.Cartographic.fromCartesian(lookPos);
+      const targetHeading = computeBearingRad(c1, c2);
+
+      const horizDist = Math.max(5.0, Cesium.Cartesian3.distance(currPos, lookPos));
+      const slopeAngle = Math.atan2(c2.height - c1.height, horizDist);
+      const targetPitch = Cesium.Math.clamp(slopeAngle - Cesium.Math.toRadians(12.0), Cesium.Math.toRadians(-55.0), Cesium.Math.toRadians(-10.0));
+
+      if (instantSnap || smoothedHeading === null) {
+        smoothedHeading = targetHeading;
+        smoothedPitch = targetPitch;
+      } else {
+        let diffH = targetHeading - smoothedHeading;
+        while (diffH > Math.PI) diffH -= 2 * Math.PI;
+        while (diffH < -Math.PI) diffH += 2 * Math.PI;
+        smoothedHeading += diffH * 0.14;
+        smoothedPitch += (targetPitch - smoothedPitch) * 0.14;
+      }
+
+      const norm = Cesium.Ellipsoid.WGS84.geodeticSurfaceNormal(currPos, new Cesium.Cartesian3());
+      const eyePos = Cesium.Cartesian3.add(currPos, Cesium.Cartesian3.multiplyByScalar(norm, 2.5, new Cesium.Cartesian3()), new Cesium.Cartesian3());
+
+      viewer.camera.setView({
+        destination: eyePos,
+        orientation: { heading: smoothedHeading, pitch: smoothedPitch, roll: 0.0 }
+      });
+    }
+
+    povSpeedSlider.oninput = (e) => {
+      povSpeedMultiplier = parseFloat(e.target.value);
+      povSpeedLabel.textContent = povSpeedMultiplier === 1.0 ? "1.0x (Real-Time)" : `${povSpeedMultiplier.toFixed(1)}x`;
+    };
+
+    povScrubber.oninput = (e) => {
+      stopPov(false);
+      povNormalizedProgress = parseInt(e.target.value, 10) / 1000.0;
+      povProgressLabel.textContent = `${Math.round(povNormalizedProgress * 100)}%`;
+      ghostOverlay.style.opacity = 0;
+      opacitySlider.value = 0;
+      document.getElementById('opacityLabel').textContent = "0%";
+      positionCameraAlongLine(povNormalizedProgress, true);
+    };
+
+    resetPovBtn.onclick = () => {
+      stopPov(true);
+      positionCameraAlongLine(0.0, true);
+    };
+
+    playPovBtn.onclick = () => {
+      if (activeTrajectoryPositions.length < 2) return;
+      if (isPlayingPov) { stopPov(false); return; }
+
+      if (povNormalizedProgress >= 0.99) povNormalizedProgress = 0.0;
+      isPlayingPov = true;
+      lastTickMs = performance.now();
+
+      viewer.scene.screenSpaceCameraController.enableCollisionDetection = false;
+
+      ghostOverlay.style.opacity = 0;
+      opacitySlider.value = 0;
+      document.getElementById('opacityLabel').textContent = "0%";
+      playPovBtn.textContent = "⏸ Pause (Free 3D Orbit)";
+      playPovBtn.className = "btn-amber";
+
+      povListener = viewer.clock.onTick.addEventListener(() => {
+        const now = performance.now();
+        const dtSec = Math.min((now - lastTickMs) / 1000.0, 0.1);
+        lastTickMs = now;
+
+        const metersPerSec = 14.0 * povSpeedMultiplier;
+        povNormalizedProgress += (metersPerSec * dtSec) / totalLineDistanceMeters;
+
+        if (povNormalizedProgress >= 1.0) {
+          povNormalizedProgress = 1.0;
+          povScrubber.value = 1000;
+          povProgressLabel.textContent = "100%";
+          positionCameraAlongLine(1.0, false);
+          stopPov(false);
+          return;
+        }
+
+        povScrubber.value = Math.round(povNormalizedProgress * 1000);
+        povProgressLabel.textContent = `${Math.round(povNormalizedProgress * 100)}%`;
+        positionCameraAlongLine(povNormalizedProgress, false);
+      });
+    };
+
+    function stopPov(resetToStart) {
+      isPlayingPov = false;
+      if (povListener) { povListener(); povListener = null; }
+      if (resetToStart) {
+        povNormalizedProgress = 0.0;
+        smoothedHeading = null;
+        smoothedPitch = null;
+        povScrubber.value = 0;
+        povProgressLabel.textContent = "0%";
+      }
+      playPovBtn.textContent = "▶ Play 3D POV Run";
+      playPovBtn.className = "btn-green";
+      viewer.scene.screenSpaceCameraController.enableCollisionDetection = true;
+      viewer.camera.lookAtTransform(Cesium.Matrix4.IDENTITY);
+    }
+  </script>
+</body>
+</html>
